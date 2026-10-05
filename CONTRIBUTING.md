@@ -1,203 +1,100 @@
-# Contributing to NSAT
-
-Welcome, and thank you for your interest in **NSAT — Network Security Audit & Threat Assessment**! NSAT is an open-source, CLI-first, multi-layer defensive security auditing platform. This guide explains how to contribute safely and effectively.
+# Contributing to NSAT — Network Security Audit & Threat Assessment
 
 ## Table of Contents
 
 - [Welcome](#welcome)
-- [Project Philosophy](#project-philosophy)
-- [Code of Conduct](#code-of-conduct)
-- [Ways to Contribute](#ways-to-contribute)
-- [Setting Up the Development Environment](#setting-up-the-development-environment)
-- [Repository Structure](#repository-structure)
-- [Creating a New Language Analyzer](#creating-a-new-language-analyzer)
-- [Creating a New Security Rule](#creating-a-new-security-rule)
-- [Creating a Scanner Adapter](#creating-a-scanner-adapter)
-- [Adding Tests](#adding-tests)
-- [Documentation Contributions](#documentation-contributions)
-- [AI / Model Integration Contributions](#ai--model-integration-contributions)
-- [Security-Sensitive Contributions](#security-sensitive-contributions)
-- [Commit Guidelines](#commit-guidelines)
-- [Pull Request Guidelines](#pull-request-guidelines)
-- [Issue Guidelines](#issue-guidelines)
-- [Review Process](#review-process)
-- [What Maintainers Look For](#what-maintainers-look-for)
-- [Good First Contributions](#good-first-contributions)
+- [Project philosophy](#project-philosophy)
+- [Development setup](#development-setup)
+- [Repository structure](#repository-structure)
+- [Add a language analyzer](#add-a-language-analyzer)
+- [Add a security rule or scanner](#add-a-security-rule-or-scanner)
+- [Add AI providers or report formats](#add-ai-providers-or-report-formats)
+- [Tests and documentation](#tests-and-documentation)
+- [Security-sensitive contributions](#security-sensitive-contributions)
+- [Commits, issues, and pull requests](#commits-issues-and-pull-requests)
+- [Review and good first contributions](#review-and-good-first-contributions)
 - [Documentation](#documentation)
 
 ## Welcome
 
-NSAT is built to be extended. Analyzers, scanners, oversight rules, correlation rules, report formats, and AI providers are all interface-driven, so a contribution can usually be added in one module without touching the rest of the pipeline. Newcomers are welcome — documentation, tests, and small rules are great places to start.
+Contributions that improve accurate, explainable, defensive security engineering are welcome. Before starting, read the [README](README.md), [architecture](ARCHITECTURE.md), and [setup guide](SETUP.md). The repository currently lacks root package/dependency metadata; coordinate with maintainers for the supported development environment rather than inventing a dependency install recipe.
 
-## Project Philosophy
+## Project philosophy
 
-Read these before contributing; they shape every review decision:
+- Keep deterministic evidence as the source of truth; AI explanations and patches are suggestions.
+- Make boundaries and coverage limits clear.
+- Prefer focused, reviewable changes over broad refactors.
+- Preserve the target user’s files and local work.
+- Require authorization and bounded behavior for active checks.
+- Avoid claims that findings are exhaustive or false-positive-free.
 
-1. **Working end-to-end beats partially-built breadth.** A small, robust, tested feature is worth more than a large unfinished one.
-2. **Deterministic first, AI second.** Every core capability must work with no network and no LLM. The AI layer only explains; it never produces authoritative findings.
-3. **Never depend on naming conventions.** Detect syntax structures, calls, imports, configuration, and source→sink relationships — not variable/function/class names or comments.
-4. **Graceful degradation.** If an optional external tool is missing, catch it, log a warning, mark the capability unavailable, and continue with native checks. Never throw unhandled tracebacks.
-5. **Defensive safety boundaries.** No exploit generation, no denial-of-service floods, no high-volume brute force. Active probes are bounded, non-destructive, and authorization-gated.
+## Development setup
 
-See [AGENTS.md](AGENTS.md) for the full engineering constraints and module boundaries.
+Use Python 3.11+, a virtual environment, and the maintainer-provided dependencies. Test files are organized by phase under `tests/`. Do not modify or run broad destructive operations on a target repository. To identify relevant tests, inspect filenames such as `tests/test_phase2.py` or `tests/test_phase4c.py`; run commands only when the environment has the required dependencies.
 
-## Code of Conduct
+## Repository structure
 
-This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
+| Path | Responsibility |
+| --- | --- |
+| `nsat/cli/` | Click CLI and presentation helpers |
+| `nsat/core/` | Config, discovery, project intelligence, surfaces, orchestration |
+| `nsat/analyzers/` | Language analyzer interface and adapters |
+| `nsat/scanners/` | Native source, secret, dependency, container, host, network, web modules |
+| `nsat/normalization/` | Canonical finding/evidence model |
+| `nsat/swarm/` | Active validation planner, coordinator, agents |
+| `nsat/oversight/` | Oversight engine and rules |
+| `nsat/correlation/` | Relationships, attack paths, risk, blast radius |
+| `nsat/ai/` | Providers, context construction, explain/chat/report generation |
+| `nsat/remediation/` | Plans, patches, snapshots, rollback, verification |
+| `nsat/reporting/` | Main audit report exporters |
+| `nsat/remediation_report/` | Separate PDF remediation/change report |
+| `tests/` | Phase regression suites and fixtures |
 
-## Ways to Contribute
+## Add a language analyzer
 
-- Report or triage issues.
-- Improve documentation and fix broken links.
-- Add tests and test fixtures.
-- Add a language analyzer, scanner adapter, security rule, or oversight rule.
-- Add a report format or improve terminal UX.
-- Add an AI provider adapter.
-- Harden or extend the correlation, risk, and blast-radius engines.
+1. Read `nsat/analyzers/base.py` and at least one adjacent-language implementation.
+2. Add an adapter following the interface for extensions, detection, and structural/security evidence extraction.
+3. Register it in `nsat/analyzers/__init__.py` and align enabled-language configuration if needed.
+4. Add representative safe/unsafe fixtures and focused tests, including malformed input and generic identifiers.
+5. State what is parsed, what is heuristic, and which rule coverage is not present.
 
-## Setting Up the Development Environment
+Do not claim full AST/taint support based on a detector or lightweight structural extraction.
 
-```bash
-git clone https://github.com/your-org/network-agent.git
-cd network-agent
+## Add a security rule or scanner
 
-python -m venv .venv
-source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
+Return `CanonicalFinding` objects with source scanner and evidence. Follow an existing scanner/rule convention and wire a new Phase 2 scanner deliberately in `nsat/core/orchestrator.py`; a file existing under `nsat/scanners/` does not automatically enter the primary scan. Deduplicate deterministically where appropriate. Scanner failures should be bounded, understandable, and must not silently imply that analysis completed successfully.
 
-pip install --upgrade pip
-pip install -e .
+For active validation, use the existing `TargetScope`, bounded request client, redaction, and authorization flow. Never add destructive probes, credential attacks, uncontrolled concurrency, or a route to scan arbitrary targets without explicit scope.
 
-nsat doctor                         # verify environment
-pytest -v                           # run the full suite (131 tests)
-```
+## Add AI providers or report formats
 
-Full setup details are in [SETUP.md](SETUP.md).
+Implement provider behavior via `nsat/ai/provider.py` (`LLMProvider`) and follow the current GLM/Kimi configuration patterns. Keep prompts evidence-bound, minimize context, redact secrets, report uncertainty, and handle timeout/unavailable cases. Never treat model output as a finding without deterministic evidence.
 
-## Repository Structure
+For a report format, add a real renderer/exporter, CLI behavior, tests, and documentation together. Do not list SARIF/HTML as supported until generated artifacts have the promised format and are validated.
 
-```text
-nsat/
-├── cli/            # Click commands & Rich UI
-├── core/           # Discovery, orchestrator, surface, config, capability registry
-├── analyzers/      # Language analyzers (base interface + per-language)
-├── scanners/       # sast, secrets, dependencies, container, host, network, web
-├── normalization/  # CanonicalFinding model
-├── swarm/          # Active Validation Swarm (coordinator, planner, agents)
-├── oversight/      # Developer Oversight engine (rules)
-├── correlation/    # Graph, rules, risk, blast radius, location
-├── ai/             # LLMProvider abstraction, provider, explainer, chatbot, reports
-└── reporting/      # Terminal, JSON, Markdown exporters
-```
+## Tests and documentation
 
-Data flows in one direction: `CLI → core → analyzers/scanners → normalization → swarm/oversight → correlation → ai → reporting`. Do not introduce circular dependencies. See [ARCHITECTURE.md](ARCHITECTURE.md).
+Add focused tests for new behavior and regression cases; follow phase test conventions. Include negative cases, failure paths, safety boundaries, and preservation of unrelated user changes where relevant. Do not put live secrets or network targets in fixtures.
 
-## Creating a New Language Analyzer
+Update the appropriate product/technical/setup/architecture docs when behavior changes. Verify links, commands, module names, models, and supported languages against the implementation. Mark planned behavior as planned. Documentation must not claim a capability based only on an old PRD.
 
-1. Create `nsat/analyzers/<lang>_analyzer.py`.
-2. Subclass `LanguageAnalyzer` from `nsat/analyzers/base.py` and implement the abstract members: `language_name`, `supported_extensions`, `detect(file_path, content)`, and the `extract_*` methods (`extract_structure`, `extract_frameworks`, `extract_entry_points`, `extract_network_operations`, `extract_database_components`, `extract_auth_indicators`, `extract_security_operations`).
-3. Emit security-relevant operations as structured sinks (e.g. `SecurityRelevantOperation(operation_type=..., sink_category=...)`) — do **not** emit findings here; scanners consume the IR and emit `CanonicalFinding`s.
-4. Register the analyzer in `nsat/analyzers/__init__.py:get_default_analyzers()`.
-5. Add a fixture under `tests/fixtures/sample-<lang>/` and a test.
+## Security-sensitive contributions
 
-Target syntax constructs and sinks, not identifier names.
+Do not include credentials, real customer code, private endpoints, or exploit payloads in commits/issues. Follow [SECURITY.md](SECURITY.md) for private vulnerability reports. Remediation changes must preserve backup/hash checks and avoid overwriting concurrent user edits. Review outbound AI context and report redaction behavior; regex redaction is not a guarantee that every secret is detected.
 
-## Creating a New Security Rule
+## Commits, issues, and pull requests
 
-Static SAST patterns live in `nsat/scanners/sast/native_rules.py`. To add a rule:
+- Use concise commit subjects describing the change; avoid claiming a phase is complete without evidence.
+- For issues, include NSAT version/commit, OS/Python version, sanitized command and output, expected behavior, and a minimal reproduction. Remove paths/secrets first.
+- For pull requests, describe motivation, scope, implementation, tests actually run, limitations, and documentation changes. Link relevant issues where available.
+- Keep unrelated formatting, generated bytecode, reports, and local state out of a change.
 
-1. Define the structural pattern (call expression, sink, interpolation) you want to flag.
-2. Emit a `CanonicalFinding` with a sequential ID prefix (e.g. `NSAT-<RULE>-###`), a `category`, `severity`, `confidence`, evidence, impact, and recommendation.
-3. Ensure the finding flows through normalization and correlation without special-casing.
+## Review and good first contributions
 
-Oversight rules live in `nsat/oversight/rules/`. Subclass the rule base, implement `audit(repo_path, intel, surface, existing_findings)`, register the rule in `nsat/oversight/engine.py`, and keep detection static and non-crashing (rule errors must be contained).
-
-## Creating a Scanner Adapter
-
-1. Create a module under `nsat/scanners/<domain>/scanner.py`.
-2. Subclass `BaseScanner` from `nsat/scanners/base.py` and implement `scanner_name` and `scan(target_path, surface) -> list[CanonicalFinding]`.
-3. For external tools, probe availability via `shutil.which` / the capability registry, and fall back to native behavior when absent. Never block startup on an external binary.
-4. Wire the scanner into `Phase2Orchestrator.run()` in `nsat/core/orchestrator.py` if it should run in the default pipeline.
-
-## Adding Tests
-
-- Tests live in `tests/` and are grouped by phase (`test_phase1.py` … `test_phase4b.py`).
-- Fixtures live in `tests/fixtures/`.
-- Prefer integration tests that exercise the real pipeline over trivial getter tests.
-- Run `pytest -v` before and after your change; all tests must pass.
-
-## Documentation Contributions
-
-- Every major doc has a Table of Contents with working anchor links and a bottom **Documentation** cross-link section. Keep both intact when editing.
-- Use relative Markdown links and verify targets exist.
-- Label anything not yet implemented as **Planned**, **Roadmap**, **Future Work**, or **Experimental**. Do not present planned features as completed.
-- Keep terminology consistent (see the consistency checklist in [AGENTS.md](AGENTS.md)).
-
-## AI / Model Integration Contributions
-
-- Implement the `LLMProvider` interface (`nsat/ai/provider.py`): `provider_name`, `generate(...)`, `chat(...)`, `health_check()`.
-- All AI features must degrade gracefully to deterministic output when no provider is configured.
-- Apply secret redaction (see `nsat/ai/context_builder.py`) to anything sent to a model.
-- Never let the AI layer fabricate findings, line numbers, ports, or CVEs. See [AI_INSTRUCTION.md](AI_INSTRUCTION.md).
-
-## Security-Sensitive Contributions
-
-- Keep active probes bounded, non-destructive, and behind the authorization gate (`TargetScope` / `--authorized`).
-- Do not add exploit generation, DoS/flood capabilities, or high-volume brute force.
-- Redact secrets in evidence, reports, logs, and AI context.
-- If your change affects the authorization model or could leak discovered secrets, call it out explicitly in the PR and read [SECURITY.md](SECURITY.md).
-
-## Commit Guidelines
-
-- Write clear, imperative commit messages ("Add PHP command-injection sink detection").
-- Keep commits focused; avoid mixing unrelated changes.
-- Reference an issue where applicable.
-- Do not commit secrets, `.env`, or generated reports (see `.gitignore`).
-
-## Pull Request Guidelines
-
-- Open the PR against `main` with a descriptive title and a summary of *what* and *why*.
-- Note any behavior change, new dependency, or security implication.
-- Ensure `pytest -v` passes and documentation stays accurate and cross-linked.
-- Update `Phases.md`/`README.md` status tables if you change what is implemented vs. planned.
-- Small, reviewable PRs are preferred over large ones.
-
-## Issue Guidelines
-
-- Use the [bug report](.github/ISSUE_TEMPLATE/bug_report.md) and [feature request](.github/ISSUE_TEMPLATE/feature_request.md) templates.
-- For security vulnerabilities, do **not** open a public issue — follow [SECURITY.md](SECURITY.md).
-- Include version, OS, the command run, and relevant output.
-
-## Review Process
-
-1. A maintainer reviews for correctness, safety boundaries, philosophy fit, and test coverage.
-2. You may be asked for changes; discussion happens on the PR.
-3. Once approved and passing tests, a maintainer merges.
-
-## What Maintainers Look For
-
-- Correctness and evidence-based behavior (no name-based heuristics, no fabricated findings).
-- Defensive safety boundaries respected.
-- Deterministic-first design and graceful degradation.
-- Tests and accurate, cross-linked documentation.
-- Minimal, focused changes that avoid overengineering.
-
-## Good First Contributions
-
-- Fix a broken link or typo in the docs.
-- Add a test fixture and a matching test.
-- Add a new oversight rule or SAST pattern.
-- Add a scanner adapter for an optional external tool (with native fallback).
-- Improve terminal report formatting or CLI help text.
+Reviewers should check evidence quality, safety boundaries, model/source agreement, error handling, tests, and docs. Promising focused contributions include documenting analyzer coverage, adding a test for a current rule, clarifying setup once a dependency manifest is available, or implementing an advertised-but-missing report format with tests.
 
 ## Documentation
 
-- [README](README.md)
-- [PRD](PRD.md)
-- [TRD](TRD.md)
-- [Architecture](ARCHITECTURE.md)
-- [Setup](SETUP.md)
-- [Phases](Phases.md)
-- [AI Instructions](AI_INSTRUCTION.md)
-- [Agent Instructions](AGENTS.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
+- [README](README.md) · [PRD](PRD.md) · [TRD](TRD.md) · [Architecture](ARCHITECTURE.md)
+- [Phases](Phases.md) · [Setup](SETUP.md) · [AI Instructions](AI_INSTRUCTION.md)
+- [Agent Instructions](AGENTS.md) · [Security Policy](SECURITY.md)
