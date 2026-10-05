@@ -710,12 +710,14 @@ def fix_cmd(
             target_path = Path(path).resolve()
 
         from nsat.remediation.manager import RemediationManager
-        RemediationManager.rollback_remediation(
+        rollback_result = RemediationManager.rollback_remediation(
             remediation_id=rollback_id,
             repo_root=target_path,
             force=force,
             console=console,
         )
+        if not rollback_result.success:
+            raise click.ClickException(rollback_result.message)
         return
 
     if not finding_id:
@@ -743,6 +745,12 @@ def fix_cmd(
     from nsat.ai.config import KimiConfig
     from nsat.ai.kimi import KimiProvider
     from nsat.remediation.manager import RemediationManager
+
+    if not any(
+        finding.id.upper() == finding_id.upper() or finding_id.upper() in finding.id.upper()
+        for finding in security_model.findings
+    ):
+        raise click.ClickException(f"Finding '{finding_id}' not found in the current security model.")
 
     k_cfg = KimiConfig.load()
     provider = KimiProvider(k_cfg) if (ai and k_cfg.is_configured()) else None
