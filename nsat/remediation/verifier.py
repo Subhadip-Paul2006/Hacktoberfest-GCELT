@@ -16,10 +16,13 @@ Safely validates post-remediation changes:
 
 import ast
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 from nsat.correlation.risk import RiskEngine
+from nsat.core.surface import SecuritySurface
 from nsat.normalization.models import CanonicalFinding
 from nsat.remediation.models import (
     RemediationProposal,
@@ -29,6 +32,7 @@ from nsat.remediation.models import (
     VerificationReport,
 )
 from nsat.remediation.rollback import RollbackManager
+from nsat.remediation.snapshot import SnapshotManager
 from nsat.scanners.container.scanner import ContainerScanner
 from nsat.scanners.sast.native_rules import NativeSASTScanner
 from nsat.scanners.secrets.scanner import SecretScanner
@@ -49,12 +53,23 @@ class VerificationEngine:
         previous_risk_score: int = 80,
         previous_risk_level: str = "HIGH",
         auto_rollback_on_failure: bool = True,
+        baseline_findings: Optional[list[CanonicalFinding]] = None,
     ) -> VerificationReport:
         """
         Execute full end-to-end verification pipeline on remediated asset.
         """
-        target_file = (repo_root / proposal.affected_file).resolve()
+        try:
+            target_file = SnapshotManager.resolve_repo_file(repo_root, proposal.affected_file)
+        except ValueError as exc:
+            return cls._handle_failure(
+                repo_root, snapshot, proposal, previous_risk_score, previous_risk_level,
+                VerificationOutcome.VERIFICATION_FAILED, False,
+                [f"Verification target rejected: {exc}"], auto_rollback_on_failure,
+                "Unsafe verification target.",
+            )
         evidence_log: list[str] = []
+        snapshot.status = RemediationStatus.TESTING
+        SnapshotManager.save_metadata(repo_root, snapshot)
 
         # 1. Syntax check on target file (Python / Dockerfile / JS)
         syntax_ok, syntax_err = cls._check_syntax(target_file)
@@ -95,7 +110,24 @@ class VerificationEngine:
         evidence_log.append("Targeted tests passed successfully.")
 
         # 3. Targeted Re-Scan using relevant native analyzer
-        re_scan_findings = cls._rescan_file(repo_root, target_file, original_finding)
+        snapshot.status = RemediationStatus.RESCANNING
+        SnapshotManager.save_metadata(repo_root, snapshot)
+        try:
+            re_scan_findings = cls._rescan_file(repo_root, target_file, original_finding)
+        except Exception as exc:
+            evidence_log.append(f"Relevant re-scan failed: {type(exc).__name__}.")
+            return cls._handle_failure(
+                repo_root=repo_root,
+                snapshot=snapshot,
+                proposal=proposal,
+                previous_risk_score=previous_risk_score,
+                previous_risk_level=previous_risk_level,
+                outcome=VerificationOutcome.VERIFICATION_FAILED,
+                tests_passed=True,
+                evidence=evidence_log,
+                auto_rollback=auto_rollback_on_failure,
+                err_msg="Relevant security re-scan could not complete.",
+            )
 
         # Check if the specific finding ID or signature still exists
         finding_still_present = any(
@@ -104,15 +136,37 @@ class VerificationEngine:
             for f in re_scan_findings
         )
 
+        baseline_signatures = {
+            finding.signature_hash for finding in (baseline_findings or [])
+        }
+        regressions = [
+            finding for finding in re_scan_findings
+            if finding.signature_hash not in baseline_signatures
+            and finding.severity.upper() in {"CRITICAL", "HIGH"}
+        ]
+        if regressions:
+            evidence_log.append(
+                "Re-scan found new high-impact finding(s): "
+                + ", ".join(f.id for f in regressions)
+            )
+            return cls._handle_failure(
+                repo_root, snapshot, proposal, previous_risk_score,
+                previous_risk_level, VerificationOutcome.REGRESSION, True,
+                evidence_log, auto_rollback_on_failure,
+                "Re-scan detected a new critical or high severity finding.",
+            )
+
         if finding_still_present:
             evidence_log.append(
                 f"Re-scan detected finding '{original_finding.id}' is still present in {proposal.affected_file}."
             )
             # Finding was not resolved
-            outcome = VerificationOutcome.STILL_PRESENT
-            resolved = False
-            curr_score = previous_risk_score
-            curr_level = previous_risk_level
+            return cls._handle_failure(
+                repo_root, snapshot, proposal, previous_risk_score,
+                previous_risk_level, VerificationOutcome.STILL_PRESENT, True,
+                evidence_log, auto_rollback_on_failure,
+                "Target finding remained after the remediation re-scan.",
+            )
         else:
             evidence_log.append(
                 f"Re-scan verified finding '{original_finding.id}' eliminated from {proposal.affected_file}."
@@ -120,7 +174,11 @@ class VerificationEngine:
             outcome = VerificationOutcome.RESOLVED
             resolved = True
             # Recalculate risk score deterministically: finding eliminated
-            curr_score = max(0, previous_risk_score - 25)
+            severity_score = RiskEngine.BASE_SEVERITY_SCORES.get(
+                original_finding.severity.upper(), 10.0
+            ) * max(0.5, original_finding.confidence)
+            contribution = int(round(original_finding.risk_score or severity_score))
+            curr_score = max(0, previous_risk_score - contribution)
             if curr_score >= 80:
                 curr_level = "CRITICAL"
             elif curr_score >= 60:
@@ -132,6 +190,8 @@ class VerificationEngine:
             else:
                 curr_level = "INFO"
 
+        snapshot.status = RemediationStatus.VERIFIED
+        SnapshotManager.save_metadata(repo_root, snapshot)
         return VerificationReport(
             remediation_id=snapshot.remediation_id,
             finding_id=original_finding.id,
@@ -170,17 +230,40 @@ class VerificationEngine:
     @classmethod
     def _run_targeted_tests(cls, repo_root: Path, affected_file: str) -> tuple[bool, str]:
         """
-        Run fast in-memory or targeted tests if available.
-        For Python files, tests if module imports or passes basic parse test.
+        Run the nearest conventional Python test module when present, without
+        invoking a shell or any command supplied by a model.
         """
-        # If file is python, verify compilation
-        target_path = repo_root / affected_file
+        target_path = SnapshotManager.resolve_repo_file(repo_root, affected_file)
         if target_path.suffix.lower() == ".py":
             try:
                 compile(target_path.read_text(encoding="utf-8"), str(target_path), "exec")
-                return True, "Module compilation test passed."
             except Exception as e:
                 return False, str(e)
+
+            stem = target_path.stem
+            candidates = [
+                repo_root / f"test_{stem}.py",
+                repo_root / "tests" / f"test_{stem}.py",
+            ]
+            test_file = next((path for path in candidates if path.is_file()), None)
+            if test_file:
+                try:
+                    completed = subprocess.run(
+                        [sys.executable, "-m", "pytest", "-q", str(test_file)],
+                        cwd=repo_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    return False, "Relevant pytest module timed out after 120 seconds."
+                except OSError as exc:
+                    return False, f"Could not start relevant pytest module ({type(exc).__name__})."
+                if completed.returncode:
+                    return False, f"Relevant pytest module failed (exit {completed.returncode})."
+                return True, f"Module compilation and {test_file.relative_to(repo_root)} passed."
+            return True, "Module compilation passed; no conventional targeted pytest module was found."
 
         return True, "No test failures."
 
@@ -202,23 +285,26 @@ class VerificationEngine:
             if "container" in cat or "docker" in target_file.name.lower():
                 c_scanner = ContainerScanner()
                 # Run container scanner on repo_root
-                all_c = c_scanner.scan(repo_root)
+                all_c = c_scanner.scan(repo_root, SecuritySurface(target_path=str(repo_root)))
                 findings.extend([f for f in all_c if proposal_match(f, target_file, repo_root)])
 
             # 2. Secret scanner
             elif "secret" in cat:
                 s_scanner = SecretScanner()
-                all_s = s_scanner.scan(repo_root)
+                all_s = s_scanner.scan(repo_root, SecuritySurface(target_path=str(repo_root)))
                 findings.extend([f for f in all_s if proposal_match(f, target_file, repo_root)])
 
             # 3. SAST / Code analyzer (Python, JS, Java, CPP)
             else:
                 sast_scanner = NativeSASTScanner()
-                all_sast = sast_scanner.scan(repo_root)
+                all_sast = sast_scanner.scan(
+                    repo_root, SecuritySurface(target_path=str(repo_root))
+                )
                 findings.extend([f for f in all_sast if proposal_match(f, target_file, repo_root)])
 
         except Exception as exc:
-            logger.warning(f"Re-scan encounter error: {exc}")
+            logger.warning("Relevant re-scan failed (%s).", type(exc).__name__)
+            raise RuntimeError("Relevant NSAT scanner failed") from exc
 
         return findings
 

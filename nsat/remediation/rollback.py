@@ -54,7 +54,18 @@ class RollbackManager:
            - Skip automatic restoration to avoid clobbering user changes.
            - Flag ROLLBACK_CONFLICT.
         """
-        backup_dir = Path(metadata.backup_dir)
+        root = repo_root.resolve()
+        backup_dir = Path(metadata.backup_dir).resolve()
+        try:
+            backup_dir.relative_to((root / ".nsat" / "remediation").resolve())
+        except ValueError:
+            return RollbackResult(
+                success=False,
+                status=RemediationStatus.FAILED,
+                message="Backup directory is outside this repository's remediation store.",
+                restored_files=[],
+                conflicted_files=metadata.affected_files,
+            )
         if not backup_dir.is_dir():
             return RollbackResult(
                 success=False,
@@ -67,12 +78,41 @@ class RollbackManager:
         restored_files: list[str] = []
         conflicted_files: list[str] = []
 
+        # Validate every destination and backup before changing any file.
+        backup_sources: dict[str, Path] = {}
+        destinations: dict[str, Path] = {}
+        for rel_path in metadata.affected_files:
+            try:
+                dest = SnapshotManager.resolve_repo_file(root, rel_path)
+            except ValueError:
+                return RollbackResult(
+                    success=False,
+                    status=RemediationStatus.FAILED,
+                    message=f"Rollback target escapes repository root: {rel_path}",
+                    restored_files=[],
+                    conflicted_files=[rel_path],
+                )
+            source = (backup_dir / rel_path).resolve()
+            try:
+                source.relative_to(backup_dir)
+            except ValueError:
+                return RollbackResult(False, RemediationStatus.FAILED,
+                    f"Backup path escapes snapshot directory: {rel_path}", [], [rel_path])
+            if not source.is_file():
+                return RollbackResult(False, RemediationStatus.FAILED,
+                    f"Backup file is missing: {rel_path}", [], [rel_path])
+            if SnapshotManager.compute_sha256(source) != metadata.original_hashes.get(rel_path):
+                return RollbackResult(False, RemediationStatus.FAILED,
+                    f"Backup integrity check failed: {rel_path}", [], [rel_path])
+            backup_sources[rel_path] = source
+            destinations[rel_path] = dest
+
         # 1. Pre-flight conflict check across all affected files
         for rel_path in metadata.affected_files:
-            curr_file = repo_root / rel_path
+            curr_file = destinations[rel_path]
             expected_post_hash = metadata.post_patch_hashes.get(rel_path)
 
-            if curr_file.is_file() and expected_post_hash and not force:
+            if not force:
                 curr_hash = SnapshotManager.compute_sha256(curr_file)
                 # If file changed from what the patch produced, conflict!
                 if curr_hash != expected_post_hash and curr_hash != metadata.original_hashes.get(rel_path):
@@ -96,12 +136,8 @@ class RollbackManager:
 
         # 2. Execute file restorations
         for rel_path in metadata.affected_files:
-            source_backup = backup_dir / rel_path
-            target_dest = repo_root / rel_path
-
-            if not source_backup.is_file():
-                logger.error(f"Missing backup file: {source_backup}")
-                continue
+            source_backup = backup_sources[rel_path]
+            target_dest = destinations[rel_path]
 
             target_dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_backup, target_dest)
@@ -110,13 +146,19 @@ class RollbackManager:
             restored_hash = SnapshotManager.compute_sha256(target_dest)
             expected_orig_hash = metadata.original_hashes.get(rel_path)
 
-            if expected_orig_hash and restored_hash != expected_orig_hash:
+            if not expected_orig_hash or restored_hash != expected_orig_hash:
                 logger.critical(
                     f"Restored file '{rel_path}' integrity check failed! "
                     f"Expected {expected_orig_hash}, got {restored_hash}"
                 )
-            else:
-                restored_files.append(rel_path)
+                return RollbackResult(
+                    success=False,
+                    status=RemediationStatus.FAILED,
+                    message=f"Restored file failed SHA-256 verification: {rel_path}",
+                    restored_files=restored_files,
+                    conflicted_files=[rel_path],
+                )
+            restored_files.append(rel_path)
 
         metadata.status = RemediationStatus.ROLLED_BACK
         cls._save_metadata(repo_root, metadata)
@@ -134,6 +176,8 @@ class RollbackManager:
     @staticmethod
     def _save_metadata(repo_root: Path, metadata: SnapshotMetadata) -> None:
         """Persist updated snapshot metadata."""
-        meta_file = repo_root / ".nsat" / "remediation" / metadata.remediation_id / "metadata.json"
+        if not metadata.remediation_id.startswith("REM-") or Path(metadata.remediation_id).name != metadata.remediation_id:
+            return
+        meta_file = repo_root.resolve() / ".nsat" / "remediation" / metadata.remediation_id / "metadata.json"
         if meta_file.parent.is_dir():
             meta_file.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")

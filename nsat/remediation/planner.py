@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from nsat.ai.kimi import KimiProvider
+from nsat.ai.context_builder import AIContextBuilder
 from nsat.ai.prompts import KIMI_FIX_PROMPT, KIMI_REMEDIATION_SYSTEM_PROMPT
 from nsat.correlation.models import Phase4SecurityModel
 from nsat.normalization.models import CanonicalFinding
@@ -33,7 +34,7 @@ class RemediationPlanner:
         # 1. Locate finding in security model
         target_finding: Optional[CanonicalFinding] = None
         for f in model.findings:
-            if f.id.upper() == finding_id.upper() or finding_id.upper() in f.id.upper():
+            if f.id.upper() == finding_id.upper():
                 target_finding = f
                 break
 
@@ -90,6 +91,7 @@ class RemediationPlanner:
                     end_line=end_line,
                     code_context=code_context,
                     full_content=content,
+                    security_model=model,
                     provider=provider,
                 )
                 if proposal:
@@ -116,30 +118,50 @@ class RemediationPlanner:
         end_line: int,
         code_context: str,
         full_content: str,
+        security_model: Phase4SecurityModel,
         provider: KimiProvider,
     ) -> Optional[RemediationProposal]:
         """Invoke Kimi-K3 and parse structured patch proposal."""
         loc = target_finding.primary_location or {}
-        ev_summary = "\n".join(f"- [{e.type}] {e.description}" for e in target_finding.evidence)
+        ev_summary = "\n".join(
+            f"- [{e.type}] {cls._redact(e.description)}"
+            for e in target_finding.evidence
+        )
         impact_summary = target_finding.impact or "Security exposure."
+        related_ids = {value.split()[0] for value in target_finding.related_findings}
+        related = [f for f in security_model.findings if f.id in related_ids]
+        related_summary = cls._redact("\n".join(
+            f"- {f.id}: {f.title} ({f.severity})" for f in related
+        )) or "None recorded."
+        attack_paths = [
+            path for path in security_model.attack_paths
+            if target_finding.id in path.involved_finding_ids
+        ]
+        attack_path_summary = cls._redact("\n".join(
+            f"- {path.title}: {' -> '.join(path.steps)}; impact: {path.impact}"
+            for path in attack_paths
+        )) or "None recorded."
 
         prompt = KIMI_FIX_PROMPT.format(
             finding_id=target_finding.id,
-            title=target_finding.title,
+            title=cls._redact(target_finding.title),
             severity=target_finding.severity,
             priority=target_finding.priority or "P1",
+            confidence=target_finding.confidence,
             category=target_finding.category,
-            recommendation=target_finding.recommendation,
+            recommendation=cls._redact(target_finding.recommendation),
             file_path=rel_file,
             line_number=target_line,
             function_name=loc.get("function_name") or target_finding.function_name or "N/A",
             class_name=loc.get("class_name") or target_finding.class_name or "N/A",
             endpoint=loc.get("endpoint") or target_finding.endpoint or "N/A",
             evidence_text=ev_summary or "AST sink match.",
-            impact_text=impact_summary,
+            impact_text=cls._redact(impact_summary),
+            related_findings=related_summary,
+            attack_path=attack_path_summary,
             start_line=start_line,
             end_line=end_line,
-            code_context=code_context,
+            code_context=cls._redact(code_context),
         )
 
         resp = provider.generate(
@@ -150,6 +172,28 @@ class RemediationPlanner:
         )
 
         return cls._parse_kimi_response(resp, target_finding, rel_file, full_content)
+
+    @staticmethod
+    def _redact(text: str) -> str:
+        """Remove common credential values before sending context to Kimi."""
+        text = AIContextBuilder.redact_secrets(text)
+        text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
+        patterns = (
+            r"(?i)(\b(?:api[_-]?key|secret|password|passwd|token|authorization)\b\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+            r"(?i)(\b(?:AKIA|ASIA)[A-Z0-9]{12,})",
+            r"(?i)(\b(?:Bearer\s+)[A-Za-z0-9._~+/=-]{12,})",
+            r"(?i)(['\"])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,})(['\"])",
+        )
+        for index, pattern in enumerate(patterns):
+            if index == 0:
+                text = re.sub(pattern, r"\1[REDACTED]", text)
+            elif index == 2:
+                text = re.sub(pattern, "[REDACTED]", text)
+            elif index == 3:
+                text = re.sub(pattern, r"\1[REDACTED]\2", text)
+            else:
+                text = re.sub(pattern, "[REDACTED]", text)
+        return text
 
     @classmethod
     def _parse_kimi_response(
@@ -163,6 +207,9 @@ class RemediationPlanner:
         # Extract diff block
         diff_match = re.search(r"```diff\s*(.*?)\s*```", resp_text, re.DOTALL)
         patch_text = diff_match.group(1).strip() if diff_match else ""
+        headers = [line.strip() for line in patch_text.splitlines() if line.startswith(("--- ", "+++ "))]
+        if headers != [f"--- a/{rel_file}", f"+++ b/{rel_file}"]:
+            return None
 
         # Extract removed (-) lines as original snippet, added (+) lines as replacement
         orig_lines = []
@@ -248,7 +295,7 @@ class RemediationPlanner:
             for line in lines:
                 if "/var/run/docker.sock" in line:
                     orig = line.strip()
-                    repl = "# NSAT-REMEDIATED: Docker socket volume mount removed to prevent container breakout\n# " + orig
+                    repl = "# NSAT-REMEDIATED: Host Docker socket mount removed."
                     diff = cls._build_diff(rel_file, orig, repl)
                     return RemediationProposal(
                         finding_id=target_finding.id,

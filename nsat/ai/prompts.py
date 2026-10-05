@@ -140,6 +140,7 @@ FINDING DETAILS:
 - Title: {title}
 - Severity: {severity}
 - Priority: {priority}
+- Confidence: {confidence}
 - Category: {category}
 - Recommendation: {recommendation}
 
@@ -155,6 +156,10 @@ EVIDENCE & ATTACK CHAIN:
 
 RELATED FINDINGS & IMPACT:
 {impact_text}
+Related findings:
+{related_findings}
+Relevant attack path:
+{attack_path}
 
 TARGET FILE CODE CONTEXT (Lines {start_line} to {end_line}):
 ```

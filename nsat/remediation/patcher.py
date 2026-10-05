@@ -48,7 +48,10 @@ class Patcher:
         Validate that the proposal targets an existing file, has exact matching context,
         and matches snapshot hashes.
         """
-        target_file = (repo_root / proposal.affected_file).resolve()
+        try:
+            target_file = SnapshotManager.resolve_repo_file(repo_root, proposal.affected_file)
+        except ValueError as exc:
+            return False, f"Patch rejected safely. {exc}"
         if not target_file.is_file():
             return False, f"Target file does not exist: {proposal.affected_file}"
 
@@ -65,6 +68,22 @@ class Patcher:
         clean_orig = proposal.original_snippet.strip()
         if clean_orig and clean_orig not in file_content:
             return False, "Original code snippet not found in target file (context mismatch)."
+        if not clean_orig or not proposal.replacement_snippet.strip():
+            return False, "Patch rejected: original and replacement snippets must be non-empty."
+        if file_content.count(clean_orig) != 1:
+            return False, "Patch rejected: original context is ambiguous; expected exactly one match."
+
+        # The applier performs a bounded single-file replacement rather than
+        # interpreting model-provided diff syntax. Reject diffs that advertise
+        # modifications to another path so the reviewed proposal matches scope.
+        diff_paths = [
+            line[4:].strip() for line in proposal.proposed_patch.splitlines()
+            if line.startswith(("--- ", "+++ "))
+        ]
+        if diff_paths:
+            expected = {f"a/{proposal.affected_file}", f"b/{proposal.affected_file}"}
+            if len(diff_paths) != 2 or set(diff_paths) != expected:
+                return False, "Patch rejected: diff contains unexpected file scope."
 
         # Reject empty replacement or entire file replacement (> 80% of file)
         if len(file_content.splitlines()) > 5:
@@ -93,7 +112,7 @@ class Patcher:
                 affected_file=proposal.affected_file,
             )
 
-        target_file = (repo_root / proposal.affected_file).resolve()
+        target_file = SnapshotManager.resolve_repo_file(repo_root, proposal.affected_file)
         content = target_file.read_text(encoding="utf-8")
         pre_hash = SnapshotManager.compute_sha256(target_file)
 

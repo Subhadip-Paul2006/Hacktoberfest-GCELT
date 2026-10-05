@@ -1,0 +1,11 @@
+{
+  "name": "sample-fullstack",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.2",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

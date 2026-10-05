@@ -1,0 +1,1 @@
+{"version":3,"file":"App.tsx","sources":["App.tsx"],"sourcesContent":["import React from 'react';\n// Internal administrative debug route\nconst ADMIN_API = '/api/v1/admin/dashboard';\nexport default function App() { return <div>Demo</div>; }"],"mappings":"AAAA;AAAA;AAAA;AAAA"}

@@ -112,6 +112,11 @@ class RemediationManager:
             con.print(f"[bold red][X] Failed to generate targeted patch proposal for '{finding_id}'.[/bold red]")
             return None
 
+        valid, validation_message = Patcher.validate_proposal(repo_root, proposal)
+        if not valid:
+            con.print(f"[bold red]Patch rejected safely. {validation_message}[/bold red]")
+            return None
+
         # 3. Present proposal to user
         diff_text = proposal.proposed_patch or (
             f"--- a/{proposal.affected_file}\n+++ b/{proposal.affected_file}\n"
@@ -137,14 +142,7 @@ class RemediationManager:
             con.print("\n[bold yellow][DRY-RUN] Dry run mode enabled. No files modified. No backup created.[/bold yellow]\n")
             return None
 
-        # 5. User confirmation if not auto_approve
-        if not auto_approve:
-            import click
-            if not click.confirm("\nApply this surgical patch to your repository?", default=True):
-                con.print("[yellow]Remediation cancelled by user. Working tree unchanged.[/yellow]")
-                return None
-
-        # 6. Create Mandatory Pre-Patch Snapshot & Backup
+        # 5. Create the mandatory snapshot before approval and before any write.
         con.print("\n  [dim]-> Creating pre-patch snapshot & backup...[/dim]")
         audit_id_val = getattr(security_model, "audit_id", None) or security_model.project.get("audit_id")
         snapshot = SnapshotManager.create_snapshot(
@@ -157,13 +155,76 @@ class RemediationManager:
         con.print(f"  [bold green][OK] Snapshot created:[/] [dim]{snapshot.remediation_id}[/dim]")
         con.print(f"  [dim]    Backup location: {snapshot.backup_dir}[/dim]")
 
+        valid, validation_message = Patcher.validate_proposal(repo_root, proposal, snapshot)
+        if not valid:
+            snapshot.status = RemediationStatus.FAILED
+            SnapshotManager.save_metadata(repo_root, snapshot)
+            con.print(f"[bold red]Patch rejected safely. {validation_message}[/bold red]")
+            cls.record_history(repo_root, {
+                "remediation_id": snapshot.remediation_id,
+                "finding_id": target_finding.id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "affected_files": snapshot.affected_files,
+                "proposed_patch": proposal.proposed_patch,
+                "backup_created": True,
+                "backup_location": snapshot.backup_dir,
+                "outcome": "VERIFICATION_FAILED",
+                "reason": validation_message,
+                "tests_passed": False,
+                "resolved": False,
+                "rollback_performed": False,
+            })
+            return None
+
+        # User reviews a backed-up, hash-validated proposal before approval.
+        if not auto_approve:
+            import click
+            if not click.confirm("\nApply this surgical patch to your repository?", default=True):
+                rollback = RollbackManager.rollback(repo_root, snapshot)
+                cls.record_history(repo_root, {
+                    "remediation_id": snapshot.remediation_id,
+                    "finding_id": target_finding.id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affected_files": snapshot.affected_files,
+                    "proposed_patch": proposal.proposed_patch,
+                    "backup_created": True,
+                    "backup_location": snapshot.backup_dir,
+                    "outcome": rollback.status.value,
+                    "reason": "User cancelled before patch application.",
+                    "tests_passed": False,
+                    "resolved": False,
+                    "rollback_performed": rollback.success,
+                    "rollback_status": rollback.status.value,
+                })
+                con.print("[yellow]Remediation cancelled. Original files remain unchanged.[/yellow]")
+                return None
+
+        snapshot.status = RemediationStatus.APPROVED
+        SnapshotManager.save_metadata(repo_root, snapshot)
+
         # 7. Apply Patch
         con.print("  [dim]-> Applying minimal targeted patch...[/dim]")
         patch_res = Patcher.apply_patch(repo_root, proposal, snapshot)
         if not patch_res.success:
             con.print(f"[bold red][X] {patch_res.message}[/bold red]")
-            # Attempt rollback if modified
-            RollbackManager.rollback(repo_root, snapshot)
+            snapshot.status = RemediationStatus.FAILED
+            SnapshotManager.save_metadata(repo_root, snapshot)
+            rollback = RollbackManager.rollback(repo_root, snapshot)
+            cls.record_history(repo_root, {
+                "remediation_id": snapshot.remediation_id,
+                "finding_id": target_finding.id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "affected_files": snapshot.affected_files,
+                "proposed_patch": proposal.proposed_patch,
+                "backup_created": True,
+                "backup_location": snapshot.backup_dir,
+                "outcome": rollback.status.value,
+                "reason": patch_res.message,
+                "tests_passed": False,
+                "resolved": False,
+                "rollback_performed": rollback.success,
+                "rollback_status": rollback.status.value,
+            })
             return None
 
         con.print("  [bold green][OK] Patch applied successfully.[/bold green]")
@@ -178,6 +239,7 @@ class RemediationManager:
             previous_risk_score=security_model.risk.overall_score,
             previous_risk_level=security_model.risk.risk_level,
             auto_rollback_on_failure=True,
+            baseline_findings=security_model.findings,
         )
 
         # 9. Print Before / After Verification Report
@@ -191,6 +253,23 @@ class RemediationManager:
                 "finding_id": target_finding.id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "affected_files": [proposal.affected_file],
+                "proposed_patch": proposal.proposed_patch,
+                "backup_created": True,
+                "backup_location": snapshot.backup_dir,
+                "applied": True,
+                "tests": {"passed": report.tests_passed},
+                "rescans": report.re_scan_evidence,
+                "verification": report.outcome.value,
+                "before_state": {
+                    "status": report.previous_status,
+                    "risk_score": report.previous_risk_score,
+                    "risk_level": report.previous_risk_level,
+                },
+                "after_state": {
+                    "status": report.current_status,
+                    "risk_score": report.current_risk_score,
+                    "risk_level": report.current_risk_level,
+                },
                 "outcome": report.outcome.value,
                 "tests_passed": report.tests_passed,
                 "resolved": report.resolved,
@@ -198,6 +277,7 @@ class RemediationManager:
                 "current_risk_score": report.current_risk_score,
                 "rollback_performed": report.rollback_performed,
                 "rollback_status": report.rollback_status,
+                "reason": proposal.reason,
             },
         )
 

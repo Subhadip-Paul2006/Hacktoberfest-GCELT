@@ -90,6 +90,8 @@ class KimiProvider(LLMProvider):
                     if not choices:
                         raise ValueError("Kimi response returned empty choices array.")
                     content = choices[0].get("message", {}).get("content", "")
+                    if not isinstance(content, str) or not content.strip():
+                        raise ValueError("Kimi response content was missing or invalid.")
                     return content.strip()
 
                 # Retry on rate limit (429) or transient server errors (5xx)
@@ -100,9 +102,9 @@ class KimiProvider(LLMProvider):
                 if resp.status_code == 401:
                     raise PermissionError("Kimi authentication failed (401 Unauthorized). Verify API key.")
 
-                raise RuntimeError(
-                    f"Kimi API error HTTP {resp.status_code}: {resp.text[:200]}"
-                )
+                # Do not include arbitrary provider response bodies in errors;
+                # they can echo prompts, credentials, or sensitive code context.
+                raise RuntimeError(f"Kimi API error HTTP {resp.status_code}.")
 
             except requests.exceptions.Timeout:
                 last_exception = TimeoutError(
@@ -112,7 +114,7 @@ class KimiProvider(LLMProvider):
                     time.sleep(1.0)
                     continue
             except requests.exceptions.RequestException as exc:
-                last_exception = RuntimeError(f"Kimi connection error: {type(exc).__name__}: {str(exc)}")
+                last_exception = RuntimeError(f"Kimi connection error: {type(exc).__name__}.")
                 if attempts <= self.config.max_retries:
                     time.sleep(1.0)
                     continue

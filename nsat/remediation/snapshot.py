@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -48,22 +49,21 @@ class SnapshotManager:
             └── backup/
                 └── <relative_path>/<file>
         """
-        clean_finding = finding_id.replace(":", "_").replace("/", "_")
-        timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        remediation_id = f"REM-{clean_finding}-{timestamp_str}"
+        clean_finding = "".join(c if c.isalnum() or c in "-_" else "_" for c in finding_id)
+        timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        remediation_id = f"REM-{clean_finding}-{timestamp_str}-{uuid.uuid4().hex[:8]}"
 
         remediation_dir = repo_root / ".nsat" / "remediation" / remediation_id
         backup_dir = remediation_dir / "backup"
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=False)
 
         original_hashes: dict[str, str] = {}
         saved_files: list[str] = []
 
         for rel_path in affected_files:
-            target_file = (repo_root / rel_path).resolve()
-            if not target_file.exists():
-                logger.warning(f"File marked for backup does not exist: {target_file}")
-                continue
+            target_file = cls.resolve_repo_file(repo_root, rel_path)
+            if not target_file.is_file():
+                raise ValueError(f"File marked for backup does not exist: {rel_path}")
 
             file_hash = cls.compute_sha256(target_file)
             original_hashes[rel_path] = file_hash
@@ -96,6 +96,17 @@ class SnapshotManager:
         logger.info(f"Created pre-remediation snapshot '{remediation_id}' for {len(saved_files)} file(s).")
         return metadata
 
+    @staticmethod
+    def resolve_repo_file(repo_root: Path, rel_path: str) -> Path:
+        """Resolve a target path and reject traversal or symlink escapes."""
+        root = repo_root.resolve()
+        target = (root / rel_path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Target path escapes repository root: {rel_path}") from exc
+        return target
+
     @classmethod
     def verify_pre_patch_integrity(cls, repo_root: Path, metadata: SnapshotMetadata) -> tuple[bool, str]:
         """
@@ -103,7 +114,10 @@ class SnapshotManager:
         Guards against overwriting newer edits made by the user.
         """
         for rel_path, expected_hash in metadata.original_hashes.items():
-            curr_file = repo_root / rel_path
+            try:
+                curr_file = cls.resolve_repo_file(repo_root, rel_path)
+            except ValueError:
+                return False, f"Target file '{rel_path}' escapes repository root."
             if not curr_file.exists():
                 return False, f"Target file '{rel_path}' does not exist on disk."
 
@@ -116,14 +130,16 @@ class SnapshotManager:
     @classmethod
     def save_metadata(cls, repo_root: Path, metadata: SnapshotMetadata) -> None:
         """Persist snapshot metadata to disk."""
-        meta_file = repo_root / ".nsat" / "remediation" / metadata.remediation_id / "metadata.json"
+        meta_file = repo_root.resolve() / ".nsat" / "remediation" / metadata.remediation_id / "metadata.json"
         meta_file.parent.mkdir(parents=True, exist_ok=True)
         meta_file.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
 
     @classmethod
     def load_snapshot(cls, repo_root: Path, remediation_id: str) -> Optional[SnapshotMetadata]:
         """Load snapshot metadata from disk."""
-        meta_file = repo_root / ".nsat" / "remediation" / remediation_id / "metadata.json"
+        if not remediation_id.startswith("REM-") or Path(remediation_id).name != remediation_id:
+            return None
+        meta_file = repo_root.resolve() / ".nsat" / "remediation" / remediation_id / "metadata.json"
         if not meta_file.exists():
             return None
         try:

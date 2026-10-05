@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 from datetime import datetime
 from typing import Any
+import uuid
 import click
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -100,6 +101,71 @@ def _build_security_pipeline(
     security_model = CorrelationEngine.run(p4_input)
 
     return target_path, intelligence, surface, findings, swarm_result, oversight_result, security_model
+
+
+def _audit_context_path(repo_root: Path) -> Path:
+    return repo_root.resolve() / ".nsat" / "audit-context" / "latest.json"
+
+
+def _redact_audit_value(value: Any) -> Any:
+    """Recursively redact secrets in persisted scanner context."""
+    if isinstance(value, str):
+        from nsat.remediation.planner import RemediationPlanner
+        return RemediationPlanner._redact(value)
+    if isinstance(value, list):
+        return [_redact_audit_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_audit_value(item) for key, item in value.items()}
+    return value
+
+
+def _save_audit_context(repo_root: Path, model: Phase4SecurityModel) -> None:
+    """Persist the latest redacted correlation model for targeted remediation."""
+    audit_id = f"AUD-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    model.project["path"] = str(repo_root.resolve())
+    model.project["audit_id"] = audit_id
+    context_file = _audit_context_path(repo_root)
+    context_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "audit_id": audit_id,
+        "repository_root": str(repo_root.resolve()),
+        "created_at": datetime.now().astimezone().isoformat(),
+        "model": _redact_audit_value(model.model_dump(mode="json")),
+    }
+    temporary = context_file.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(context_file)
+
+
+def _load_audit_context(repo_root: Path) -> Phase4SecurityModel | None:
+    """Load the newest cached audit in this repository or one child project."""
+    root = repo_root.resolve()
+    candidates = [root]
+    try:
+        candidates.extend(
+            child for child in root.iterdir()
+            if child.is_dir() and child.name not in {".git", ".venv", "node_modules"}
+        )
+    except OSError:
+        pass
+    context_files = [path for candidate in candidates if (path := _audit_context_path(candidate)).is_file()]
+    context_files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for context_file in context_files:
+        try:
+            payload = json.loads(context_file.read_text(encoding="utf-8"))
+            stored_root = Path(payload["repository_root"]).resolve()
+            stored_root.relative_to(root)
+            if stored_root != context_file.parent.parent.parent.resolve():
+                continue
+            model = Phase4SecurityModel.model_validate(payload["model"])
+            model.project["path"] = str(stored_root)
+            model.project["audit_id"] = payload["audit_id"]
+            return model
+        except Exception as exc:
+            console.print(
+                f"[yellow]Cached audit context could not be loaded ({type(exc).__name__}); trying another context.[/yellow]"
+            )
+    return None
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -219,6 +285,7 @@ def audit_cmd(
             oversight_result=oversight_result,
         )
         security_model = CorrelationEngine.run(p4_input)
+        _save_audit_context(target_path, security_model)
 
     if json_out:
         output = {
@@ -656,15 +723,22 @@ def fix_cmd(
         console.print("Run [bold cyan]nsat audit[/bold cyan] to see available finding IDs.")
         return
 
-    # Build security context to locate finding
-    target_path, intel, surface, findings, swarm_result, oversight_result, security_model = _build_security_pipeline(
-        path=path,
-        target=None,
-        active=False,
-        oversight=True,
-        authorized=False,
-        config=config,
-    )
+    # Reuse the most recent same-repository audit model when available.
+    if not (target_path / "src").exists() and (target_path / "demo-vuln-app").is_dir():
+        target_path = target_path / "demo-vuln-app"
+    security_model = _load_audit_context(target_path)
+    if security_model:
+        target_path = Path(security_model.project.get("path") or target_path).resolve()
+        console.print("[dim]Using latest saved audit context.[/dim]")
+    else:
+        target_path, intel, surface, findings, swarm_result, oversight_result, security_model = _build_security_pipeline(
+            path=str(target_path),
+            target=None,
+            active=False,
+            oversight=True,
+            authorized=False,
+            config=config,
+        )
 
     from nsat.ai.config import KimiConfig
     from nsat.ai.kimi import KimiProvider
