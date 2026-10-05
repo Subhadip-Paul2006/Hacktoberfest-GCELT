@@ -1,0 +1,220 @@
+Metadata-Version: 2.4
+Name: nsat
+Version: 0.1.0
+Summary: Network Security Audit & Threat Assessment — Defensive, CLI-first security auditing platform
+Author: NSAT Core Team
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: click>=8.1.7
+Requires-Dist: rich>=13.7.0
+Requires-Dist: pydantic>=2.6.0
+Requires-Dist: pyyaml>=6.0.1
+Requires-Dist: psutil>=5.9.8
+
+# NSAT — Network Security Audit & Threat Assessment
+
+> **Defensive, CLI-First Security Auditing, Attack-Path Correlation, and Autonomous Remediation Platform.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-brightgreen.svg)](https://python.org)
+[![CLI: Rich-Powered](https://img.shields.io/badge/CLI-Rich%20Powered-magenta.svg)](https://github.com/Textualize/rich)
+[![Status: Hackathon MVP](https://img.shields.io/badge/Status-Hackathon%20MVP-orange.svg)]()
+
+---
+
+## 1. The Problem
+
+Modern codebases are increasingly composed of AI-generated ("vibe-coded") logic, complex microservices, and multi-cloud configurations. Traditional security scanners operate in isolated silos:
+- **SAST tools** flag raw code lines without context.
+- **Secret scanners** find tokens without knowing if they are reachable.
+- **Network scanners** find open ports without knowing what code is listening.
+- **Generic AI wrappers** hallucinate vulnerabilities and rely heavily on descriptive function/variable names (`login()`, `user_input`), failing completely on obfuscated or AI-scaffolded code (`a()`, `handler2()`, `tmp`).
+
+---
+
+## 2. The Solution: NSAT
+
+**NSAT** unifies code, secrets, dependencies, network bindings, containers, and host permissions into a single defensive threat engine. It treats security findings not as isolated alerts, but as nodes in an **Attack Surface Graph**, synthesizing multi-hop attack paths and evaluating post-compromise blast radius.
+
+### The 7-Stage Core Pipeline
+
+```text
+  SCAN ───► NORMALIZE ───► DEDUPLICATE ───► CORRELATE ───► ANALYZE ───► EXPLAIN ───► REMEDIATE ───► VERIFY
+```
+
+1. **SCAN:** Discovers project architecture and applies AST semantic parsing and security checks.
+2. **NORMALIZE:** Translates all findings into a uniform `CanonicalFinding` model.
+3. **DEDUPLICATE:** Suppresses noise (vendor dirs, harmless constants) and merges overlapping scanner results.
+4. **CORRELATE:** Constructs an in-memory graph connecting open ports, code injection sinks, and exposed secrets.
+5. **ANALYZE:** Computes the **Post-Compromise Blast Radius** under an "Assume Breach" model.
+6. **EXPLAIN:** Delivers technical explanations separating **[FACT]**, **[INFERENCE]**, and **[RECOMMENDATION]**.
+7. **REMEDIATE & VERIFY:** Proposes surgical unified diffs, applies approved patches, runs tests, and re-scans to verify issue eradication.
+
+---
+
+## 3. Key Capabilities
+
+- **Language-Agnostic Semantic AST Analysis:** Fully supports **C++, Java, Python, and JavaScript/TypeScript**. Detects security-critical source-to-sink data flow even when variable/function names are meaningless (`a()`, `x1()`, `tmp`).
+- **Post-Compromise Blast Radius (Flagship Feature):** Quantifies what an attacker can reach (local `.env` secrets, internal databases, mounted `/var/run/docker.sock`, cloud IAM tokens) if a service is breached.
+- **Offline & Deterministic First:** Full scanning, correlation, scoring, and patch generation function 100% offline without an internet connection or LLM.
+- **Pluggable Scanner Ecosystem:** Integrates external engines (Semgrep, Gitleaks, Trivy, Nmap, osquery) with seamless fallback to NSAT-native checks when tools are missing.
+- **Closed-Loop Verification:** `nsat fix` applies surgical patches and automatically triggers `nsat verify` to prevent regressions.
+
+---
+
+## 4. Supported Languages (MVP)
+
+| Language | Primary Detection & AST Engine | Target Frameworks & Sinks |
+| :--- | :--- | :--- |
+| **Python** | Native `ast` + Tree-sitter | FastAPI, Flask, Django; SQLi, Command Injection, Raw Sockets |
+| **JavaScript / TypeScript** | Tree-sitter | Express, NestJS, Next.js, React; `eval()`, Subprocess, CORS |
+| **Java** | Tree-sitter | Spring Boot, Servlets; Weak MD5/SHA-1 crypto, Command execution |
+| **C++** | Tree-sitter | Crow, Drogon, Boost.Beast, POSIX Sockets; Buffer overflow, `popen()` |
+
+---
+
+## 5. Quick Start (Under 2 Minutes)
+
+### Prerequisites
+- Python 3.11+
+- Git
+
+### Installation
+```bash
+# Clone the repository
+git clone https://github.com/your-org/network-agent.git
+cd network-agent
+
+# Set up virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+
+# Install dependencies
+pip install -r requirements.txt
+pip install -e .
+```
+
+### Validate Environment Capabilities
+```bash
+nsat doctor
+```
+
+---
+
+## 6. CLI Usage & Commands
+
+```bash
+# 1. Audit local source repository
+nsat audit ./path/to/project
+
+# 2. Audit authorized local or deployed web application
+nsat audit --target http://127.0.0.1:8000
+
+# 3. Audit local host processes, persistence, and sockets
+nsat host
+
+# 4. Audit explicitly authorized network subnet
+nsat network 192.168.1.0/24 --authorized
+
+# 5. Explain a specific finding (separates Fact, Inference, Recommendation)
+nsat explain NSAT-PY-001
+
+# 6. Apply surgical remediation patch and auto-verify
+nsat fix NSAT-PY-001
+nsat verify
+
+# 7. Export full report in SARIF, JSON, or Markdown
+nsat report --format sarif --output audit-results.sarif
+```
+
+---
+
+## 7. Deterministic Hackathon Demo Walkthrough
+
+NSAT bundles a multi-language vulnerable demo application in `./tests/demo-vuln-app`:
+
+```bash
+# Step 1: Run comprehensive audit
+$ nsat audit ./tests/demo-vuln-app
+```
+```text
+  _  _ ___   _ _____ 
+ | \| / __| /_\_   _|  NETWORK SECURITY AUDIT & THREAT ASSESSMENT
+ | .` \__ \/ _ \| |    v1.0.0 | Defensive Multi-Layer Security Platform
+ |_|\_|___/_/ \_\_|  
+
+[i] Discovered: Python (60%), TypeScript (25%), C++ (15%) | Archetype: REST API
+[✔] AST Code Analysis Complete (14 files scanned)
+[✔] Secret & Entropy Scanner Complete (2 credentials found)
+[✔] Network Exposure Inspector Complete (Port 5432 bound to 0.0.0.0)
+[✔] Container Security Complete (Dockerfile runs as root with docker.sock mounted)
+
+[!] CORRELATED ATTACK PATH:
+    1. [SAST] SQL Injection in handler2() (src/api/handlers.py:42)
+    2. [SECRET] Leaked DB_PASSWORD in config/default.env:8
+    3. [NETWORK] PostgreSQL listener exposed on 0.0.0.0:5432
+    => CRITICAL IMPACT: Remote unauthenticated database takeover.
+
+[!] POST-COMPROMISE BLAST RADIUS:
+    Tier: TIER 3 (HOST & CLUSTER TAKEOVER)
+    Root Docker socket accessible via container volume mount.
+```
+
+```bash
+# Step 2: Surgically fix and verify
+$ nsat fix NSAT-PY-001
+[+] Applying surgical parameterized query patch to src/api/handlers.py... [APPLIED]
+$ nsat verify
+[✔] Re-scanning src/api/handlers.py...
+[✔] VERIFIED: Finding NSAT-PY-001 is ELIMINATED. Zero regressions detected.
+```
+
+---
+
+## 8. Repository Structure
+
+```text
+network-agent/
+├── Phases.md               # 4-Hour Hackathon implementation timebox
+├── SETUP.md                # Environment and dependency guide
+├── AI_INSTRUCTION.md       # AI reasoning & explainer contract
+├── AGENTS.md               # Autonomous coding agent constraints
+├── README.md               # Product overview and documentation
+├── nsat/
+│   ├── cli/                # Click/Typer commands & Rich UI
+│   ├── core/               # Orchestrator, Discovery & Capability Registry
+│   ├── analyzers/          # C++, Java, Python, JS/TS AST adapters
+│   ├── scanners/           # SAST, Secrets, Dependencies, Network, Host, Container
+│   ├── normalization/      # CanonicalFinding model & Noise Filter
+│   ├── correlation/        # Graph Engine, Blast Radius & Risk Scoring
+│   ├── remediation/        # Patch generator, Diff applier & Verifier
+│   ├── ai/                 # LLM Provider abstraction (Ollama, OpenAI, Offline)
+│   └── reporting/          # Terminal, JSON, Markdown, and SARIF exporters
+└── tests/
+    └── demo-vuln-app/      # Deterministic multi-language demo testbed
+```
+
+---
+
+## 9. Hackathon Scope vs. Future Roadmap
+
+### Hackathon MVP (Current Scope)
+- 4-Language AST Analyzers (C++, Java, Python, JavaScript/TypeScript).
+- Local & Container network binding analysis (`127.0.0.1` vs `0.0.0.0`).
+- Secret, dependency, host process, and container security audits.
+- Graph correlation & Post-Compromise Blast Radius calculator.
+- Surgical unified diff remediation & automated re-scan verification.
+
+### Future Roadmap
+- Additional language adapters: Go, Rust, C#, Ruby, Kotlin.
+- Live read-only Cloud Security Posture Management (AWS, Azure, GCP).
+- IDE background extensions for VS Code and JetBrains.
+- Automated API schema fuzzing (OpenAPI/Swagger integration).
+
+---
+
+## 10. License & Defensive Security Scope
+
+This tool is distributed under the **MIT License**.  
+**Defensive Security Notice:** NSAT is strictly engineered for defensive vulnerability assessment, internal posture auditing, and authorized remediation. Active network checks require explicit authorization (`--authorized`). NSAT does not provide exploit generation or offensive denial-of-service capabilities.

@@ -1,0 +1,2 @@
+[console_scripts]
+nsat = nsat.cli.main:cli
