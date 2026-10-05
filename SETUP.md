@@ -1,421 +1,162 @@
-# NSAT User Setup & Security Audit Guide
+# NSAT — Network Security Audit & Threat Assessment: Setup
 
-**Project:** NSAT — Network Security Audit & Threat Assessment  
-**Architecture:** Deterministic Security Surface Engine + Phase 4A Threat Graph & Risk Correlation + Phase 4B GLM-5.3 AI Reasoning Layer  
-**Core Motto:** *Deterministic First, AI Second. Smallest Robust Implementation over Largest Possible Feature Set.*
+## Table of Contents
 
----
+- [Prerequisites and checkout status](#prerequisites-and-checkout-status)
+- [Installation](#installation)
+- [Run doctor and audit](#run-doctor-and-audit)
+- [Active validation and oversight](#active-validation-and-oversight)
+- [Reports](#reports)
+- [AI configuration](#ai-configuration)
+- [Explain, chat, and remediation](#explain-chat-and-remediation)
+- [PDF remediation report](#pdf-remediation-report)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Authorized use](#authorized-use)
+- [Documentation](#documentation)
 
-## A. Requirements
+## Prerequisites and checkout status
 
-### Supported Runtime
-- **Python 3.11+** (tested on Python 3.11, 3.12, and 3.13)
-- **Git** (for version control and diff patching)
-- Operating Systems: Linux, macOS, Windows (PowerShell / Command Prompt)
+- Python 3.11 or later.
+- Git, if cloning the repository.
+- Optional: an approved provider endpoint and credentials for GLM/Kimi-assisted functions.
+- A running test application only for active validation.
 
-### Optional External Tools
-NSAT operates 100% autonomously out of the box using native AST engines, Shannon entropy secret detectors, and asyncio socket scanners. If external tools are present in `$PATH`, NSAT leverages them for enhanced coverage; otherwise, it degrades gracefully with zero tracebacks:
-- `semgrep` (supplementary static AST scanning)
-- `gitleaks` (supplementary git history secret scanning)
-- `trivy` / `osv-scanner` (external CVE vulnerability databases)
-- `nmap` (advanced raw network probing)
-- `osqueryi` (host OS process inspection)
+**Packaging caveat:** the current checkout does not include a root `pyproject.toml`, `setup.py`, or root dependency file. Consequently a clean `pip install -e .` and a dependency-complete setup cannot be guaranteed from the tracked repository contents. Ask the maintainer for the project’s supported dependency/install manifest, or use an already prepared environment. Do not install guessed dependencies into production environments.
 
-### AI Requirements
-- **GLM-5.3** (Zhipu AI / NVIDIA NIM / OpenAI-compatible proxy gateway)
-- Strictly optional. When `AI_ENABLED=false` or when credentials are missing, NSAT operates with 100% deterministic precision.
+## Installation
 
-### Target Authorization
-Active validation probes (`--active`, `nsat validate`) and runtime scans (`--target`) require explicit authorization:
-- Local loopback (`127.0.0.1`, `localhost`) is enabled by default.
-- Any remote target requires the `--authorized` flag to prevent unauthorized security testing.
+Clone the repository and create a virtual environment:
 
----
-
-## B. Installation
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/Subhadip-Paul2006/Hacktoberfest-GCELT.git
-cd Hacktoberfest-GCELT
-```
-
-### 2. Set Up Virtual Environment
-**Linux / macOS:**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-**Windows (PowerShell):**
 ```powershell
+git clone <repository-url>
+cd network-agent
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Install NSAT
-```bash
-pip install --upgrade pip
-pip install -e .
-```
+On macOS/Linux, activate with `source .venv/bin/activate`. The `nsat` executable requires this package and its declared Python dependencies to be installed. Because this checkout lacks packaging metadata, there is no verified repository command to complete that step. Once maintainers provide it, follow that install instruction rather than inferring a requirements list from imports.
 
-Verify your installation:
-```bash
-nsat --version
+The phase regression files are under `tests/`; do not assume pytest or runtime dependencies are installed unless declared by your environment.
+
+## Run doctor and audit
+
+After the CLI is available:
+
+```console
+nsat --help
 nsat doctor
+nsat audit PATH
 ```
 
----
+`doctor` reports Python/Git, language analyzer, and optional external-tool availability. `audit` runs local project discovery and deterministic scanners. To emit JSON to stdout or restrict to discovery, see `nsat audit --help` for `--json-out` and `--phase1-only`.
 
-## C. Configuration
+## Active validation and oversight
 
-NSAT uses environment variables and an optional `.env` file in the root directory.
+Only test an application you own or are explicitly authorized to assess. Start the target using its own documented development command, then bound NSAT to that URL:
 
-### Example `.env` Configuration
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
+```console
+nsat validate PATH --target http://127.0.0.1:8000 --authorized
 ```
 
-Edit `.env`:
-```env
-# AI Reasoning Configuration (GLM-5.3)
+The authorization flag is an acknowledgement by the operator; it does not establish that permission exists. An audit can combine optional checks:
+
+```console
+nsat audit PATH --active --target http://127.0.0.1:8000 --authorized --oversight
+```
+
+Developer oversight can also be invoked without active checks:
+
+```console
+nsat oversight PATH
+```
+
+## Reports
+
+Generate human-readable Markdown to a chosen path:
+
+```console
+nsat report PATH --format markdown --output audit-report.md --no-save
+```
+
+JSON is available with `--format json`. Terminal is the default. The CLI currently accepts `sarif` and `html`, but the report manager does not implement those output renderers; do not use them as production exports. Default generated audit artifacts are stored under `reports/` unless `--no-save` is set. Reports may contain sensitive repository context.
+
+AI-assisted executive narrative:
+
+```console
+nsat ai-report PATH --output executive-report.md
+```
+
+This command requires a configured, available provider for AI narrative; review the result and deterministic findings separately.
+
+## AI configuration
+
+Copy `.env.example` to `.env` and replace the example credentials locally. Never commit `.env` or real credentials.
+
+```dotenv
 AI_ENABLED=true
-
-# API Credentials (Do NOT commit real keys to Git!)
-GLM_API_KEY=your_glm_api_key
-GLM_BASE_URL=https://integrate.api.nvidia.com/v1
+GLM_API_KEY=<provider-issued-key>
+GLM_BASE_URL=<approved-compatible-api-base-url>
 GLM_MODEL=z-ai/glm-5.3
-
-# Optional: Dedicated remediation model (Phase 4C preview)
-KIMI_API_KEY=your_kimi_api_key
-KIMI_BASE_URL=https://integrate.api.nvidia.com/v1
+KIMI_API_KEY=<provider-issued-key>
+KIMI_BASE_URL=<approved-compatible-api-base-url>
 KIMI_MODEL=moonshotai/kimi-k3
 ```
 
-> [!NOTE]
-> The `GLM_BASE_URL` and `GLM_MODEL` depend on your API provider. NSAT supports NVIDIA NIM, Zhipu AI, and any OpenAI-compatible proxy gateway. Keep GLM and Kimi configurations independent.
+Defaults are configurable and may not match your provider account. The code also recognizes selected NVIDIA/OpenAI-compatible fallback environment names; exact precedence is implemented in `nsat/ai/config.py`. GLM is used for security reasoning/report/chat; Kimi is the remediation model. `AI_ENABLED=false` disables these providers. AI use may send the constructed, redacted context to the configured endpoint; use only an endpoint authorized for your data and review sensitive context before enabling it.
 
----
+## Explain, chat, and remediation
 
-## D. First Scan (Static Repository Audit)
+`explain` and `chat` build security context by running local analysis. `fix` reuses the latest saved audit context for the project when available and otherwise builds a fresh model. For example:
 
-Audit any local project, repository, or directory:
-```bash
-nsat audit /path/to/my-project
+```console
+nsat explain FINDING_ID PATH --no-ai
+nsat chat PATH --ask "Explain the evidence and uncertainty for the highest priority finding"
+nsat fix FINDING_ID PATH --dry-run
 ```
 
-### What NSAT Inspects:
-1. **Project Intelligence:** Discovers programming languages, frameworks, entrypoints, and sensitive operations.
-2. **Multi-Language AST SAST:** Detects SQL injection, command execution, path traversal, weak crypto, and debug flags without relying on variable names.
-3. **Secret Detection:** Detects high-entropy API keys, passwords, private keys, and tokens with automatic redaction.
-4. **Dependency Analysis:** Identifies vulnerable packages and known CVE advisories across requirements, package.json, and pom.xml.
-5. **Infrastructure & Containers:** Scans Dockerfiles and docker-compose configurations for root user, privilege escalation, and `/var/run/docker.sock` socket mounts.
+Review the proposed diff carefully. When ready, `nsat fix FINDING_ID PATH` prompts for approval; `--yes` bypasses that prompt and should be reserved for controlled automation. Applying a patch creates snapshot state under the target project’s `.nsat` directory and runs available verification checks. To inspect recorded outcomes later:
 
----
-
-## E. Scan a Local Web Application
-
-When your web service is running locally, scan its runtime endpoint alongside source code:
-```bash
-# Ensure your app is running on port 8000 first!
-nsat audit /path/to/my-project --target http://127.0.0.1:8000
-```
-NSAT checks HTTP security headers (CSP, HSTS, X-Frame-Options), cookie security flags, server version leaks, and public exposure.
-
----
-
-## F. Active Validation Swarm
-
-Dynamically verify vulnerabilities using the Phase 3 Active Validation Swarm:
-```bash
-nsat audit /path/to/my-project \
-  --active \
-  --target http://127.0.0.1:8000
-```
-- Executes non-destructive, bounded probes (SQL syntax checks, parameter validation, rate limiting probes).
-- Upgrades findings from `POTENTIAL` to `VALIDATED` based on real response evidence.
-- *Strictly restricted to authorized environments.*
-
----
-
-## G. Developer Oversight Audit
-
-Audit subtle business logic loopholes and information leakage:
-```bash
-nsat audit /path/to/my-project --oversight
-```
-Detects:
-- Sensitive tokens and passwords leaked in URL query parameters (`URL_LEAKAGE`)
-- Premature order confirmation without payment verification (`PREMATURE_PAYMENT`)
-- Client-controlled prices or quantities (`CLIENT_TRUST`)
-- Debug / telemetry endpoints exposed in production routes
-
----
-
-## H. Full Security Audit
-
-Execute the complete end-to-end security pipeline:
-```bash
-nsat audit /path/to/my-project \
-  --active \
-  --oversight \
-  --ai \
-  --target http://127.0.0.1:8000
+```console
+nsat verify FINDING_ID PATH
 ```
 
-### Terminal Output Pipeline:
-```text
-NSAT SECURITY AUDIT
+The `verify` command displays remediation history; it does not start a new verification run. During `fix`, the engine performs available syntax/test checks and a relevant rescan. If a failure triggers rollback, newer user edits are protected by hash checks and may result in a rollback conflict. The `--force` rollback option can override those protections; inspect the current files and backup first.
 
-  Project Discovery                  ✓
-  Static Security                    ✓
-  Active Validation                  ✓
-  Developer Oversight                ✓
-  Correlation                        ✓
-  Risk Analysis                      ✓
-  AI Security Analysis               ✓
+## PDF remediation report
 
-Overall Risk: CRITICAL (100/100)
+The separate report CLI consumes JSON model inputs; it does not run a scan or apply a patch:
 
-GLM-5.3 Analysis:
-  Multi-layer analysis revealed severe host-level compromise risks stemming from
-  unrestricted Docker socket exposure combined with dynamic command execution.
-  Sensitive tokens are transmitted via URL parameters in authentication routes.
-
-Top Attack Path:
-  Container Breakout via Mounted Docker Socket -> Host Root Daemon Takeover
-
-Most Important File:
-  src/api/handlers.py:40
-
-Recommended Priority:
-  P0
+```console
+python -m nsat.remediation_report --help
+python -m nsat.remediation_report --finding finding.json --proposal proposal.json --output remediation.pdf
+python -m nsat.remediation_report --list
 ```
 
----
+The `finding.json` and `proposal.json` files must contain data valid for the corresponding Pydantic models. Snapshot metadata is optional with `--snapshot`. By default, PDFs are written beneath `reports/remediations/`. Treat them as sensitive review artifacts.
 
-## I. Security Reports
+## Configuration
 
-NSAT provides comprehensive reports across formats:
+Core project settings are YAML fields `project`, `analysis`, `scanners`, and `ai`; see `nsat/core/config.py` for current defaults/validation. Supply a custom file with CLI `--config PATH` where supported, or put `nsat.yaml`/`nsat.yml` in the target project. Although `nsat.toml` is probed, the loader parses YAML; use YAML. Provider secrets/configuration are separate environment settings described above. `nsat config` displays the CLI’s configuration output.
 
-### Terminal Report (12 Deterministic Sections)
-```bash
-nsat report /path/to/my-project
-```
+## Troubleshooting
 
-### Machine-Readable JSON Export
-```bash
-nsat report /path/to/my-project --json
-```
+| Symptom | Check |
+| --- | --- |
+| `nsat` command not found | Confirm the package is installed in the active environment; the current repo lacks install metadata. |
+| `doctor` reports missing analyzer/tool | Some tools are optional. Review its output; do not infer that a missing optional tool disables every native check. |
+| AI provider unavailable | Check `AI_ENABLED`, the relevant key/base URL/model, network access, and provider account. Never paste a key into an issue. |
+| Target rejected or no validation results | Confirm URL, that the local service is running, and that you have authorization; check target-scope/agent result output. |
+| Finding context unavailable | `explain` and `chat` build analysis context from the target; `fix` builds fresh context if no saved AI-enabled audit context is available. |
+| Patch or rollback conflict | Stop; inspect current file, snapshot metadata, and remediation history. Do not force-rollback until newer edits are backed up and reviewed. |
+| PDF generation fails | Check valid finding/proposal JSON, optional snapshot JSON, and installed report dependencies. |
 
-### Detailed Markdown Report
-```bash
-nsat report /path/to/my-project --markdown -o audit-report.md
-```
+## Authorized use
 
-### AI-Assisted Executive Report (GLM-5.3)
-```bash
-nsat ai-report /path/to/my-project
-```
-Produces an executive 6-section human-readable narrative explaining:
-1. Executive Security Summary
-2. Risk Score & Threat Posture Interpretation
-3. Priority Findings Breakdown
-4. Correlated Multi-Hop Attack Paths
-5. Developer-Focused Technical Explanations
-6. Phased Remediation Roadmap (P0, P1, P2)
+Use NSAT against source and systems within your authority. Active checks can issue HTTP requests and may affect application logs or state despite bounded behavior. Obtain permission, use a test environment where practical, scope to a known URL, and stop if the target is unexpected. See [SECURITY.md](SECURITY.md).
 
----
+## Documentation
 
-## J. Explain Specific Findings
-
-Get deep root-cause analysis and verification instructions for any finding ID:
-```bash
-nsat explain NSAT-PY-SQLI /path/to/my-project
-```
-
-Output:
-```text
-Finding: NSAT-PY-SQLI -- SQL Injection in Database Query Handler
-Severity: CRITICAL
-Confidence: 0.95
-Status: VALIDATED
-Priority: P0
-
-Where:
-  File: src/api/handlers.py
-  Line: 40
-  Function: handler
-  Class: Not reliably resolved
-  Endpoint: GET /search
-
-What happened:
-  Unsanitized user input formatted directly into cursor.execute() query sink.
-
-Why it matters:
-  Direct database exfiltration and arbitrary SQL query execution.
-
-Evidence:
-  [AST_SINK] Call to cursor.execute() with string interpolation
-    Snippet: cur.execute(f"SELECT * FROM users WHERE name = '{x1}'")
-
-Related findings:
-  - NSAT-SEC-001 (AMPLIFIES)
-
-Potential attack path:
-  Attack Path [AP-02]: Database Compromise via Injection
-    -> Parameter Input in GET /search
-    -> Unsanitized SQL String Formatting
-    -> Credential Datastore Exfiltration
-
-Recommended direction:
-  Use parameterized query with placeholder bindings.
-
-What would verify the fix:
-  Re-scanning the target file with targeted language AST analyzer to confirm
-  that the vulnerable sink signature is no longer present.
-```
-
----
-
-## K. Interactive Security Chatbot
-
-Ask questions directly about your project's security posture:
-```bash
-nsat chat /path/to/my-project
-```
-
-### One-Shot Question:
-```bash
-nsat chat /path/to/my-project --ask "Why is this project rated critical?"
-```
-
-### Focused Chat on a Specific Finding:
-```bash
-nsat chat /path/to/my-project --finding NSAT-CONT-002
-```
-
-### Example Interactive Conversation:
-```text
-You:
-> Why is this project rated critical?
-
-NSAT:
-> The project risk score is 100/100 (CRITICAL) because:
-  1. Blast radius is Tier 3 (Host/Cluster Takeover) due to /var/run/docker.sock mounted in Dockerfile:18.
-  2. 3 CRITICAL severity findings exist, including command injection in src/api/handlers.py:52.
-  3. Dynamic active validation confirmed unauthenticated access to administrative sinks.
-
-You:
-> Which file should I fix first?
-
-NSAT:
-> You should fix 'src/api/handlers.py' first (line 40, function 'handler').
-  It contains [P0] finding NSAT-PY-SQLI which directly exposes database records.
-
-You:
-> exit
-```
-
----
-
-## L. Understanding NSAT Output Metrics
-
-- **Severity:**
-  - `CRITICAL`: Immediate compromise or host breakout (Command injection, mounted docker socket, plaintext root credentials).
-  - `HIGH`: Direct data loss, authentication bypass, or logic flaw.
-  - `MEDIUM`: Misconfiguration, unauthenticated access, or missing defense-in-depth controls.
-  - `LOW`: Missing security headers, lack of rate limiting, or minor information disclosure.
-  - `INFORMATIONAL`: Best practice recommendations.
-- **Confidence (0.0 to 1.0):**
-  - `0.90+`: High precision AST structural match or secret pattern.
-  - `0.70 - 0.89`: Probable match requiring contextual verification.
-  - `< 0.70`: Heuristic indicator.
-- **Validation Status:**
-  - `VALIDATED`: Actively confirmed via dynamic non-destructive HTTP/socket probe.
-  - `POTENTIAL`: Identified statically; pending runtime verification.
-  - `UNVERIFIED`: Static finding in unreachable code or untested route.
-- **Priority:**
-  - `P0`: Fix immediately before deployment (blocks build).
-  - `P1`: High priority patch required in current release cycle.
-  - `P2`: Medium priority remediation scheduled in standard sprint.
-  - `P3`: Low priority backlog hardening.
-- **Blast Radius Tiers:**
-  - `Tier 3 (Host/Cluster Takeover)`: Attacker gains control of the host OS, Docker daemon, or Kubernetes cluster.
-  - `Tier 2 (Data Exposure / Lateral Pivot)`: Database exfiltration or cloud credential leakage.
-  - `Tier 1 (Localized Execution)`: Impact is strictly confined to an isolated worker process.
-
----
-
-## M. Multi-Language Support
-
-NSAT provides native structural AST parsers for polyglot repositories:
-- **C++:** `nsat/analyzers/cpp/` (raw `system()`, `popen()`, unsafe `strcpy`/`sprintf`, wildcard `INADDR_ANY` bindings)
-- **Python:** `nsat/analyzers/python/` (built-in `ast` module; taint tracking into `os.system`, `subprocess`, `cursor.execute`)
-- **Java:** `nsat/analyzers/java/` (Spring annotations, `Runtime.exec`, insecure `MessageDigest` MD5/SHA-1)
-- **JavaScript / TypeScript:** `nsat/analyzers/javascript_typescript/` (`eval()`, `child_process.exec()`, unsafe JSX `dangerouslySetInnerHTML`, CORS wildcard)
-- **Rust / Go / PHP:** Native structural regex & token AST scanners
-
-Mixed-language monorepos are analyzed automatically in a single unified audit pass.
-
----
-
-## N. Auditing Deployed Web Applications
-
-When targeting deployed staging or production environments:
-1. **Explicit Authorization:** You must have written permission. Use the `--authorized` flag.
-2. **Safe Bounded Probes:** NSAT Active Validation Swarm performs bounded, read-only HTTP probes. It will never perform denial-of-service floods, brute force dictionary attacks, or destructive data modifications.
-3. **Perimeter vs Code Visibility:** Remote probing detects visible headers, route behaviors, and TLS configuration. For full correlation, supply the source repository alongside the target URL:
-   ```bash
-   nsat audit ./my-repo --target https://staging.example.com --authorized --active
-   ```
-
----
-
-## O. Optional External Tools & Fallbacks
-
-| Tool | Capability | When Missing (NSAT Native Fallback) |
-| :--- | :--- | :--- |
-| `semgrep` | Static AST rules | NSAT native Python/C++/Java AST analyzers run automatically. |
-| `gitleaks` | Secret scanner | NSAT native Shannon entropy & regex engine scans files. |
-| `trivy` | Container / CVE scanner | NSAT native offline CVE advisory catalog and Dockerfile auditor. |
-| `nmap` | Port scanner | NSAT non-privileged `asyncio` TCP socket connector. |
-| `osqueryi` | Host auditor | NSAT native `psutil` and OS process inspector. |
-
----
-
-## P. AI Disabled Mode (100% Offline)
-
-To run NSAT in strictly offline, air-gapped environments:
-```bash
-export AI_ENABLED=false
-nsat audit /path/to/my-project
-nsat report /path/to/my-project
-```
-The deterministic risk score, threat graph, attack paths, and terminal reports continue to function with complete accuracy.
-
----
-
-## Q. Troubleshooting
-
-### 1. `GLM provider unavailable`
-- Ensure `GLM_API_KEY` is set in your environment or `.env` file.
-- Verify `GLM_BASE_URL` is accessible from your network.
-- NSAT will automatically log a controlled warning and fall back to deterministic reporting.
-
-### 2. `Target path does not exist`
-- Verify the relative or absolute path provided to `nsat audit <PATH>`.
-
-### 3. `Permission denied on socket binding`
-- On Linux, binding to ports below 1024 requires root privileges. NSAT network checks use standard unprivileged user connections.
-
-### 4. `Target outside authorized scope`
-- When passing `--target <URL>`, you must certify authorization with `--authorized`.
-
----
-
-## R. Security & Authorization Warning
-
-> [!CAUTION]
-> NSAT is a dual-use defensive security assessment tool. Active validation probes and runtime network checks must **ONLY** be directed against systems, networks, and repositories that you own or for which you have explicit, documented authorization to test. Unauthorized port scanning, network probing, or vulnerability exploitation is illegal and unethical.
+- [README](README.md) · [PRD](PRD.md) · [TRD](TRD.md) · [Architecture](ARCHITECTURE.md)
+- [Phases](Phases.md) · [AI Instructions](AI_INSTRUCTION.md) · [Agent Instructions](AGENTS.md)
+- [Contributing](CONTRIBUTING.md) · [Security Policy](SECURITY.md)

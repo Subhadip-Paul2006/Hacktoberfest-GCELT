@@ -1,218 +1,160 @@
 # NSAT — Network Security Audit & Threat Assessment
 
-> **Defensive, CLI-first security auditing, attack-path correlation, and autonomous remediation platform.**
+> A CLI-first, multi-layer defensive cybersecurity platform for security auditing, validation, correlation, AI-assisted reasoning, controlled remediation, and verification.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-brightgreen.svg)](https://python.org)
-[![CLI: Rich-powered](https://img.shields.io/badge/CLI-Rich%20Powered-magenta.svg)](https://github.com/Textualize/rich)
-[![Status: Hackathon MVP](https://img.shields.io/badge/Status-Hackathon%20MVP-orange.svg)]()
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 
----
+NSAT brings project structure, source findings, secrets, dependencies, deployment configuration, and optional runtime validation into a single audit workflow. Deterministic analysis produces the findings and risk model; AI can help explain evidence or prepare remediation proposals. Changes remain reviewable, backed up, and verifiable.
 
-## 1. The Problem
+## Table of Contents
 
-Modern codebases increasingly combine AI-generated ("vibe-coded") logic, complex microservices, and multi-cloud configurations. Traditional security scanners operate in isolated silos:
+- [Why NSAT](#why-nsat)
+- [How it works](#how-it-works)
+- [Supported languages and domains](#supported-languages-and-domains)
+- [AI and remediation](#ai-and-remediation)
+- [Reports](#reports)
+- [Local demo](#local-demo)
+- [Install and run](#install-and-run)
+- [CLI](#cli)
+- [Repository map](#repository-map)
+- [Limitations and roadmap](#limitations-and-roadmap)
+- [Security scope](#security-scope)
+- [License](#license)
+- [Documentation](#documentation)
 
-- **SAST tools** flag raw code lines without context.
-- **Secret scanners** find tokens without knowing whether they are reachable.
-- **Network scanners** find open ports without knowing what code is listening.
-- **Generic AI wrappers** can hallucinate vulnerabilities and often rely on descriptive function or variable names such as `login()` and `user_input`, failing on obfuscated or AI-scaffolded code such as `a()`, `handler2()`, or `tmp`.
+## Why NSAT
 
----
+Security scanners often report isolated observations. A code issue, a reachable service, and a credential exposure may matter more together than separately. NSAT discovers project context, runs its implemented native scanners, optionally validates a running application with bounded probes, checks developer-oversight patterns, correlates findings, and ranks risk.
 
-## 2. The Solution: NSAT
+The analysis should rely on evidence such as syntax and structural patterns, imports, framework/configuration clues, source and sink relationships, and network evidence. Names like `a()`, `x()`, `foo()`, `handler2()`, and `tmp()` may be unhelpful clues; names or comments alone do not establish that code is secure or vulnerable. Analyzer depth and rule coverage vary by language, so results require engineering review.
 
-**NSAT** unifies code, secrets, dependencies, network bindings, containers, and host permissions into a single defensive threat engine. It treats security findings not as isolated alerts, but as nodes in an **Attack Surface Graph**, synthesizing multi-hop attack paths and evaluating post-compromise blast radius.
-
-### The 8-Stage Core Pipeline
+## How it works
 
 ```text
-SCAN ───► NORMALIZE ───► DEDUPLICATE ───► CORRELATE ───► ANALYZE ───► EXPLAIN ───► REMEDIATE ───► VERIFY
+DISCOVER → SCAN → NORMALIZE → DEDUPLICATE → VALIDATE* → OVERSIGHT* → CORRELATE → RANK → EXPLAIN → REMEDIATE* → VERIFY*
 ```
 
-1. **SCAN:** Discovers project architecture and applies AST-based semantic parsing and security checks.
-2. **NORMALIZE:** Translates all findings into a uniform `CanonicalFinding` model.
-3. **DEDUPLICATE:** Suppresses noise, such as vendor directories and harmless constants, and merges overlapping scanner results.
-4. **CORRELATE:** Constructs an in-memory graph connecting open ports, code-injection sinks, and exposed secrets.
-5. **ANALYZE:** Computes the **Post-Compromise Blast Radius** under an "Assume Breach" model.
-6. **EXPLAIN:** Delivers technical explanations separated into **[FACT]**, **[INFERENCE]**, and **[RECOMMENDATION]** sections.
-7. **REMEDIATE:** Proposes surgical unified diffs and applies approved patches.
-8. **VERIFY:** Runs tests and rescans to verify that issues have been eliminated without regressions.
+`*` Optional or separately invoked stages. The core audit discovers project intelligence and a security surface, then runs SAST, secret, dependency, container, and host scanners. Findings use a canonical model and signature-based deduplication. Active validation requires a running target and explicit authorization; oversight can be enabled in an audit/report or invoked directly. Correlation and risk are built for unified reports and AI-assisted workflows. Remediation is a separate, user-reviewed workflow.
 
----
+The product journey and implementation boundaries are described in [Architecture](ARCHITECTURE.md), [PRD](PRD.md), and [TRD](TRD.md).
 
-## 3. Key Capabilities
+## Supported languages and domains
 
-- **Language-agnostic semantic AST analysis:** Supports C++, Java, Python, and JavaScript/TypeScript. Detects security-critical source-to-sink data flow even when variable and function names are meaningless.
-- **Post-compromise blast radius:** Quantifies what an attacker can reach, including local `.env` secrets, internal databases, mounted `/var/run/docker.sock`, and cloud IAM tokens, after a service is breached.
-- **Offline and deterministic first:** Full scanning, correlation, scoring, and patch generation work offline without an internet connection or LLM.
-- **Pluggable scanner ecosystem:** Integrates external engines such as Semgrep, Gitleaks, Trivy, Nmap, and osquery, with NSAT-native fallbacks when tools are unavailable.
-- **Closed-loop verification:** `nsat fix` applies surgical patches and automatically triggers `nsat verify` to prevent regressions.
+Analyzer adapters are present for the primary MVP languages **C++, Python, Rust, Go, PHP, JavaScript, and TypeScript**. **Java** is also present as an existing compatibility analyzer. Detection and security rule coverage are not uniform and do not imply complete language support.
 
----
+Implemented scan areas include structural source checks, secrets, dependencies, container configuration, host/project indicators, network bindings discovered from project evidence, and web validation against an explicitly supplied target. The `nsat host` and `nsat network` commands are placeholders in this checkout; they do not provide a general host or network inventory service. See [limitations](PRD.md#limitations) before relying on a result.
 
-## 4. Supported Languages (MVP)
+## AI and remediation
 
-| Language | Primary Detection & AST Engine | Target Frameworks & Sinks |
-| :--- | :--- | :--- |
-| **Python** | Native `ast` + Tree-sitter | FastAPI, Flask, Django; SQL injection, command injection, raw sockets |
-| **JavaScript / TypeScript** | Tree-sitter | Express, NestJS, Next.js, React; `eval()`, subprocesses, CORS |
-| **Java** | Tree-sitter | Spring Boot, Servlets; weak MD5/SHA-1 cryptography, command execution |
-| **C++** | Tree-sitter | Crow, Drogon, Boost.Beast, POSIX sockets; buffer overflows, `popen()` |
+The AI layer is downstream of deterministic findings. The configured **GLM-5.3** provider supports explanations, report narratives, and security chat. The configured **Kimi K3** provider is used for remediation planning when enabled and available. Both use environment-driven, OpenAI-compatible request settings in the implementation; actual base URL and credentials must come from the operator. AI output is a proposal or narrative, not an authoritative finding.
 
----
+For remediation, NSAT prepares a finding-specific proposal, previews the patch, creates a backup before applying an approved change, checks file integrity, applies the patch, runs available targeted syntax/tests, rescans, and records the outcome. Failure can trigger rollback. Rollback checks for newer edits and avoids overwriting user changes when a conflict is detected; `--force` exists and should only be used after reviewing the consequences.
 
-## 5. Quick Start (Under 2 Minutes)
+## Reports
 
-### Prerequisites
+The main `nsat report` command produces terminal, JSON, or Markdown output and accepts `sarif` and `html` format values in the current CLI; those two formats are not fully implemented by the report manager yet. Markdown and JSON are the reliable file formats currently exposed by the implementation. The separate `python -m nsat.remediation_report` command generates a PDF human-readable remediation/change artifact from finding and proposal JSON, with optional snapshot metadata. It does not replace the audit engine.
 
-- Python 3.11+
-- Git
+## Local demo
 
-### Installation
+The repository includes `demo-vuln-app/`, a local demonstration target. Its server binds to loopback on port 8000. After installing that demo’s own requirements and ensuring the NSAT CLI is available, run the server in one terminal:
 
-```bash
-# Clone the repository
-git clone https://github.com/Subhadip-Paul2006/Hacktoberfest-GCELT.git
-cd Hacktoberfest-GCELT
+```powershell
+python -m pip install -r demo-vuln-app/requirements.txt
+python demo-vuln-app/server.py
+```
 
-# Set up a virtual environment
+Then run an audit from the repository root in another terminal:
+
+```powershell
+nsat audit demo-vuln-app --oversight
+nsat validate demo-vuln-app --target http://127.0.0.1:8000 --authorized
+nsat report demo-vuln-app --format markdown --output audit-report.md --no-save
+```
+
+Only use active validation on this local demo or another target you are authorized to assess. This project has been described as a hackathon MVP in earlier repository material; this documentation makes no sponsorship, endorsement, selection, or award claim.
+
+## Install and run
+
+Requires Python 3.11 or newer. Create a virtual environment after cloning:
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate  # Windows: .\.venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -e .
+.\.venv\Scripts\Activate.ps1
 ```
 
-### Validate Environment Capabilities
+This checkout has no root `pyproject.toml`, `setup.py`, or `requirements.txt`, so a supported installation command cannot currently be documented. The `nsat` CLI requires the package and its runtime dependencies. See [SETUP.md](SETUP.md) for the onboarding limitation and the command to run once the maintainer supplies a packaging manifest.
 
-```bash
-nsat doctor
+Run a local audit and report:
+
+```powershell
+nsat audit .
+nsat report . --format markdown --output audit-report.md --no-save
 ```
 
----
+For an application you own or are authorized to assess, run it locally, then explicitly authorize bounded validation:
 
-## 6. CLI Usage & Commands
-
-```bash
-# 1. Audit a local source repository
-nsat audit ./path/to/project
-
-# 2. Audit an authorized local or deployed web application
-nsat audit --target http://127.0.0.1:8000
-
-# 3. Audit local host processes, persistence, and sockets
-nsat host
-
-# 4. Audit an explicitly authorized network subnet
-nsat network 192.168.1.0/24 --authorized
-
-# 5. Explain a specific finding
-nsat explain NSAT-PY-001
-
-# 6. Apply a surgical remediation patch and verify it
-nsat fix NSAT-PY-001
-nsat verify
-
-# 7. Export a full report in SARIF, JSON, or Markdown
-nsat report --format sarif --output audit-results.sarif
+```powershell
+nsat validate . --target http://127.0.0.1:8000 --authorized
 ```
 
----
+Full environment, AI, remediation, and troubleshooting steps are in [SETUP.md](SETUP.md). These commands reflect `nsat/cli/main.py`; consult `nsat --help` for the installed checkout’s exact options.
 
-## 7. Deterministic Hackathon Demo Walkthrough
+## CLI
 
-NSAT bundles a multi-language vulnerable demo application in `./tests/demo-vuln-app`:
+| Command | Purpose |
+| --- | --- |
+| `nsat doctor` | Report Python, Git, analyzer, and optional-tool availability. |
+| `nsat audit [PATH]` | Discover and scan a local project; optional active validation, oversight, AI, JSON, and Phase 1-only modes. |
+| `nsat validate PATH --target URL --authorized` | Run the validation swarm against an authorized running application. |
+| `nsat oversight [PATH]` | Run discovery/scanning and developer-oversight checks. |
+| `nsat report [PATH]` | Build correlated risk context and render a report. |
+| `nsat ai-report [PATH]` | Generate an AI-assisted executive report when configured. |
+| `nsat explain [FINDING_ID] [PATH]` | Run a local analysis and explain a selected finding. |
+| `nsat chat [PATH]` | Build local analysis context and ask security questions. |
+| `nsat fix [FINDING_ID] [PATH]` | Preview or apply a remediation; also accepts rollback options. |
+| `nsat verify [FINDING_ID] [PATH]` | Display remediation/verification history; `nsat fix` performs verification after applying a patch. |
+| `nsat config` | Display configuration help/output. |
+| `nsat host`, `nsat network`, `nsat monitor` | Registered placeholders; not implemented in this release. |
 
-```bash
-# Step 1: Run a comprehensive audit
-nsat audit ./tests/demo-vuln-app
-```
+## Repository map
 
 ```text
-  _  _ ___   _ _____
- | \\| / __| /_\\_   _|  NETWORK SECURITY AUDIT & THREAT ASSESSMENT
- | .` \\__ \\/ _ \\| |    v1.0.0 | Defensive Multi-Layer Security Platform
- |_|\\_|___/_/ \\_\\_| 
-
-[i] Discovered: Python (60%), TypeScript (25%), C++ (15%) | Archetype: REST API
-[✔] AST Code Analysis Complete (14 files scanned)
-[✔] Secret & Entropy Scanner Complete (2 credentials found)
-[✔] Network Exposure Inspector Complete (Port 5432 bound to 0.0.0.0)
-[✔] Container Security Complete (Dockerfile runs as root with docker.sock mounted)
-
-[!] CORRELATED ATTACK PATH:
-    1. [SAST] SQL Injection in handler2() (src/api/handlers.py:42)
-    2. [SECRET] Leaked DB_PASSWORD in config/default.env:8
-    3. [NETWORK] PostgreSQL listener exposed on 0.0.0.0:5432
-    => CRITICAL IMPACT: Remote unauthenticated database takeover.
-
-[!] POST-COMPROMISE BLAST RADIUS:
-    Tier: TIER 3 (HOST & CLUSTER TAKEOVER)
-    Root Docker socket accessible via container volume mount.
+nsat/                 CLI, core discovery, analyzers, scanners, and domain engines
+  core/               Configuration, project discovery, orchestration, and surface models
+  analyzers/           Language-specific structural adapters
+  scanners/            SAST, secrets, dependencies, containers, host, and web checks
+  normalization/       Canonical finding and evidence model
+  swarm/               Optional bounded active-validation agents
+  oversight/            Developer-oversight engine and rules
+  correlation/          Relationships, attack paths, blast radius, and risk
+  ai/                   GLM/Kimi adapters, context, explain, chat, and narrative reports
+  remediation/           Proposal, patch, snapshot, rollback, and verification
+  reporting/             Terminal, JSON, and Markdown audit reports
+  remediation_report/    Standalone PDF remediation/change report
+tests/                  Phase regression and PDF report tests
+demo-vuln-app/           Local demonstration target
 ```
 
-```bash
-# Step 2: Surgically fix and verify
-nsat fix NSAT-PY-001
-nsat verify
-```
+## Limitations and roadmap
 
-```text
-[+] Applying surgical parameterized query patch to src/api/handlers.py... [APPLIED]
-[✔] Re-scanning src/api/handlers.py...
-[✔] VERIFIED: Finding NSAT-PY-001 is ELIMINATED. Zero regressions detected.
-```
+Findings are bounded by current rules and analyzer depth; they are not proof that a project is secure. Some advertised CLI formats and registered commands are placeholders. AI providers require operator credentials and network access. Runtime validation is restricted to targets for which the operator has authorization. Future work should be identified explicitly in [Phases](Phases.md); cloud posture management, broader scanners, and additional integrations are not claimed as implemented here.
 
----
+## Security scope
 
-## 8. Repository Structure
+Use NSAT only on source trees, systems, and running applications you own or have explicit permission to assess. The active-validation authorization flag is an operator acknowledgement, not proof of legal authority. Review every proposed patch and PDF before sharing; reports may contain sensitive paths and security context. See [SECURITY.md](SECURITY.md).
 
-```text
-Hacktoberfest-GCELT/
-├── Phases.md               # 4-hour hackathon implementation timebox
-├── SETUP.md                # Environment and dependency guide
-├── AI_INSTRUCTION.md       # AI reasoning and explainer contract
-├── AGENTS.md               # Autonomous coding agent constraints
-├── README.md               # Product overview and documentation
-├── nsat/
-│   ├── cli/                # Click/Typer commands and Rich UI
-│   ├── core/               # Orchestrator, discovery, and capability registry
-│   ├── analyzers/          # C++, Java, Python, and JS/TS AST adapters
-│   ├── scanners/           # SAST, secrets, dependencies, network, host, container
-│   ├── normalization/      # CanonicalFinding model and noise filter
-│   ├── correlation/        # Graph engine, blast radius, and risk scoring
-│   ├── remediation/        # Patch generator, diff applier, and verifier
-│   ├── ai/                 # LLM provider abstraction
-│   └── reporting/          # Terminal, JSON, Markdown, and SARIF exporters
-└── tests/
-    └── demo-vuln-app/      # Deterministic multi-language demo testbed
-```
+## License
 
----
+The repository previously identified itself as MIT-licensed but did not contain a license file. A standard MIT license is included; its copyright holder remains a placeholder pending maintainer confirmation.
 
-## 9. Hackathon Scope vs. Future Roadmap
+## Documentation
 
-### Hackathon MVP (Current Scope)
-
-- Four-language AST analyzers: C++, Java, Python, and JavaScript/TypeScript.
-- Local and container network-binding analysis (`127.0.0.1` vs. `0.0.0.0`).
-- Secret, dependency, host-process, and container-security audits.
-- Graph correlation and Post-Compromise Blast Radius calculator.
-- Surgical unified-diff remediation and automated rescan verification.
-
-### Future Roadmap
-
-- Additional language adapters: Go, Rust, C#, Ruby, and Kotlin.
-- Live read-only Cloud Security Posture Management for AWS, Azure, and GCP.
-- IDE background extensions for VS Code and JetBrains.
-- Automated API schema fuzzing with OpenAPI/Swagger integration.
-
----
-
-## 10. License & Defensive Security Scope
-
-This tool is distributed under the **MIT License**.
-
-**Defensive Security Notice:** NSAT is strictly engineered for defensive vulnerability assessment, internal posture auditing, and authorized remediation. Active network checks require explicit authorization from the system or network owner. Do not use NSAT to scan systems or networks without permission.
+- [PRD](PRD.md)
+- [TRD](TRD.md)
+- [Architecture](ARCHITECTURE.md)
+- [Phases](Phases.md)
+- [Setup](SETUP.md)
+- [AI Instructions](AI_INSTRUCTION.md)
+- [Agent Instructions](AGENTS.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
